@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS public.daily_meals (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 2b. Tabella Storico Morning Briefing Automatico al Risveglio
+CREATE TABLE IF NOT EXISTS public.morning_briefings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    briefing_date DATE NOT NULL UNIQUE,
+    sent_at TIMESTAMPTZ DEFAULT NOW(),
+    sleep_score NUMERIC,
+    resting_hr INT,
+    content TEXT
+);
+
 -- 3. Tabella Memoria Clinica, Allenamento e Infortuni
 CREATE TABLE IF NOT EXISTS public.coach_memory (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
