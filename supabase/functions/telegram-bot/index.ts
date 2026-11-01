@@ -1,3 +1,11 @@
+// Supabase Edge Function: telegram-bot
+// Cloud Serverless H24 su Supabase alimentato da Google Gemini 3.5 Flash (1500 req/die)
+// Dotato di SKILL CLINICHE E METRICHE AVANZATE:
+// - Analisi Vettoriale BIA Akern (BIVA, ICW/ECW, Na/K ratio, PhA dinamico)
+// - Telemetria Hyrox & Gestione Lattato (Cardio Z2/Z4, cadenza 175-180 spm, watt ergometri)
+// - Training Load & Readiness (CTL fitness, ATL fatica, TSB freschezza)
+// - Precisione nutrizionale (glicogeno, turnover proteico, idratazione attiva)
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 // ==============================================================================
@@ -18,20 +26,14 @@ const ATHLETE_AGE = Deno.env.get("ATHLETE_AGE") || "30";
 const ATHLETE_HEIGHT = Deno.env.get("ATHLETE_HEIGHT") || "180";
 const ATHLETE_TARGET = Deno.env.get("ATHLETE_TARGET") || "Hyrox Preparation";
 
-// Modelli Google Gemini (fallback automatico)
 const GEMINI_MODELS = [
   "gemini-3.5-flash",
-  "gemini-3.1-flash-lite",
-  "gemini-2.5-flash"
+  "gemini-3.1-flash-lite"
 ];
 
-function cleanFormatting(text: string): string {
-  if (!text) return "";
-  let clean = text.replace(/\*\*(.*?)\*\*/g, "$1");
-  clean = clean.replace(/\*(.*?)\*/g, "$1");
-  clean = clean.replace(/^\s*[-|_|*]{3,}\s*$/gm, "");
-  clean = clean.replace(/^\|.*\|$/gm, "");
-  return clean.trim();
+function cleanFormatting(t: string): string {
+  if (!t) return "";
+  return t.replaceAll("**", "").replaceAll("*", "").trim();
 }
 
 async function sendTelegram(chatId: number, text: string) {
@@ -74,8 +76,9 @@ async function getRecentChatHistory(chatId: number, limit: number = 8): Promise<
     if (res.ok) {
       const data = await res.json();
       if (data && data.length > 0) {
+        // Invertiamo l'ordine cronologico (dal più vecchio al più recente)
         const reversed = data.reverse();
-        return reversed.map((m: any) => `${m.role === 'user' ? ATHLETE_NAME : 'Coach'}: ${m.content}`).join("\n\n");
+        return reversed.map((m: any) => `${m.role === 'user' ? 'Michele' : 'Coach'}: ${m.content}`).join("\n\n");
       }
     }
   } catch (e) {
@@ -137,12 +140,12 @@ async function getSupabaseBia(): Promise<string> {
 }
 
 async function getIntervalsRecent(): Promise<string> {
-  if (!INTERVALS_KEY || !ATHLETE_ID) return "";
   try {
     const authHeader = "Basic " + btoa("API_KEY:" + INTERVALS_KEY);
     const today = new Date().toISOString().split("T")[0];
     const past = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
     
+    // 1. Wellness (Sonno, FC riposo, fitness/fatica)
     let wellnessText = "";
     const res = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/wellness?oldest=${past}&newest=${today}`, {
       headers: { Authorization: authHeader }
@@ -153,10 +156,11 @@ async function getIntervalsRecent(): Promise<string> {
         const last = wList[wList.length - 1];
         const sleepHours = Math.floor((last.sleepSecs || 0) / 3600);
         const sleepMins = Math.floor(((last.sleepSecs || 0) % 3600) / 60);
-        wellnessText = `Smartwatch oggi: Sonno ${sleepHours} ore e ${sleepMins} minuti (punteggio ${Math.round(last.sleepScore || 0)}), FC a riposo ${last.restingHR} bpm, CTL ${Math.round(last.ctl || 0)}, ATL ${Math.round(last.atl || 0)}`;
+        wellnessText = `Orologio GT 6 oggi: Sonno ${sleepHours} ore e ${sleepMins} minuti (punteggio ${Math.round(last.sleepScore || 0)}), FC a riposo ${last.restingHR} bpm, CTL ${Math.round(last.ctl || 0)}, ATL ${Math.round(last.atl || 0)}`;
       }
     }
 
+    // 2. Ultimo Allenamento sincronizzato da Huawei Watch GT 6
     let workoutText = "";
     const actRes = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/activities?oldest=${past}&newest=${today}`, {
       headers: { Authorization: authHeader }
@@ -206,7 +210,7 @@ async function getTodayMacroSummary(): Promise<string> {
           totFat += m.fat_g || 0;
           return `- ${m.meal_name || 'Pasto'}: ${m.calories || 0} kcal (Carbo ${m.carbs_g || 0}g, Pro ${m.protein_g || 0}g, Grassi ${m.fat_g || 0}g)`;
         }).join("\n");
-        return `PASTI REGISTRATI OGGI:\n${listStr}\nTOTALE GIORNALIERO: ${totCal} kcal, Carboidrati: ${totCarbs}g, Proteine: ${totPro}g, Grassi: ${totFat}g`;
+        return `PASTI REGISTRATI OGGI:\n${listStr}\nTOTALE GIORNALIERO: ${totCal} kcal, Carboidrati: ${totCarbs}g, Proteine: ${totPro}g (target ~180-200g), Grassi: ${totFat}g`;
       }
     }
   } catch (e) {
@@ -238,12 +242,92 @@ async function callGemini(systemPrompt: string, parts: any[]): Promise<string> {
         if (text && text.trim().length > 0) {
           return cleanFormatting(text);
         }
+      } else {
+        console.error(`Gemini model ${m} returned`, res.status, await res.text());
       }
     } catch (e) {
       console.error(`Gemini model ${m} failed`, e);
     }
   }
-  return "C'è stato un rallentamento momentaneo, riprova tra qualche secondo!";
+  return "C'è stato un rallentamento momentaneo, riprova tra 3 secondi!";
+}
+
+async function checkAndSendMorningBriefing(chatId: number) {
+  try {
+    const today = new Date().toISOString().split("T")[0];
+    
+    // Controlliamo se per la giornata odierna è già stato inviato il briefing
+    const checkRes = await fetch(`${SUPABASE_URL}/rest/v1/morning_briefings?briefing_date=eq.${today}&select=id`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+    if (checkRes.ok) {
+      const data = await checkRes.json();
+      if (data && data.length > 0) {
+        return; // Già inviato per oggi
+      }
+    }
+
+    // Interroghiamo Intervals.icu per verificare se Huawei Health ha caricato il sonno della notte appena trascorsa
+    const authHeader = "Basic " + btoa("API_KEY:" + INTERVALS_KEY);
+    const past = new Date(Date.now() - 3 * 86400000).toISOString().split("T")[0];
+    const res = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/wellness?oldest=${past}&newest=${today}`, {
+      headers: { Authorization: authHeader }
+    });
+
+    if (res.ok) {
+      const wList = await res.json();
+      if (wList && wList.length > 0) {
+        const todayWellness = wList.find((w: any) => w.id === today);
+        // Se Huawei ha sincronizzato il sonno di oggi (sleepSecs > 0)
+        if (todayWellness && (todayWellness.sleepSecs || 0) > 10800) { // almeno 3 ore di sonno registrate
+          const sleepHours = Math.floor((todayWellness.sleepSecs || 0) / 3600);
+          const sleepMins = Math.floor(((todayWellness.sleepSecs || 0) % 3600) / 60);
+          const score = Math.round(todayWellness.sleepScore || 0);
+          const rhr = todayWellness.restingHR || 48;
+          const ctl = Math.round(todayWellness.ctl || 0);
+          const atl = Math.round(todayWellness.atl || 0);
+
+          const prompt = `L'orologio Huawei Watch GT 6 ha appena rilevato il risveglio di Michele e sincronizzato i dati della notte:
+- Sonno: ${sleepHours} ore e ${sleepMins} minuti (Punteggio qualità ${score})
+- FC a riposo: ${rhr} bpm (baseline tipica 48-50 bpm)
+- Carico Fitness (CTL): ${ctl}, Fatica acuta (ATL): ${atl}
+- Stato infortunio: convalescenza acuta zona lombare da squat venerdì (operato L5-S1 pregresso).
+
+Genera il Morning Briefing del risveglio per Michele:
+1. Valutazione sintetica del recupero notturno (stato del sistema nervoso autonomo e sonno).
+2. Indicazione pratica per la giornata: focus su idratazione (target 4L), assunzione creatina post-allenamento/pranzo, e attenzione posturale/scarico colonna per oggi.
+3. Tono sobrio, diretto, amichevole ma senza entusiasmo finto. Massimo 6-8 righe. Zero asterischi (* o **) e zero tabelle.`;
+
+          const briefingText = await callGemini("Sei il Coach Hyrox e Nutrizionista Sportivo personale di Michele Gallone.", [{ text: prompt }]);
+          
+          await sendTelegram(chatId, `Buongiorno Michele!\n\n${briefingText}`);
+          
+          // Registriamo l'avvenuto invio su Supabase
+          await fetch(`${SUPABASE_URL}/rest/v1/morning_briefings`, {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              briefing_date: today,
+              sleep_score: score,
+              resting_hr: rhr,
+              content: briefingText
+            })
+          });
+
+          await recordChatMessage(chatId, "assistant", `[Morning Briefing Automatico]: ${briefingText}`);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Morning briefing error", e);
+  }
 }
 
 serve(async (req) => {
@@ -260,7 +344,9 @@ serve(async (req) => {
 
     const chatId = msg.chat.id;
 
-    // Regola sul saluto intelligente (evita di salutare a ogni messaggio)
+    // Check automatico: se Huawei ha caricato i dati del risveglio e non è ancora stato inviato il briefing odierno
+    await checkAndSendMorningBriefing(chatId);
+
     const lastTime = await getLastMessageTime(chatId);
     let shouldGreet = true;
     if (lastTime) {
@@ -272,30 +358,38 @@ serve(async (req) => {
 
     const greetingRule = shouldGreet
       ? "È passato molto tempo dall'ultimo contatto: puoi iniziare con un breve saluto naturale."
-      : "VIETATO SALUTARE: State già parlando, non usare convenevoli e vai direttamente al sodo.";
+      : "VIETATO SALUTARE: State già parlando, non dire 'Ciao Michele', 'Ciao Michi' o convenevoli simili. Vai direttamente al sodo rispondendo al punto.";
 
-    const systemPrompt = `Sei il Coach Hyrox, Nutrizionista Sportivo e Consulente di Biomeccanica/Ortopedia dello Sport di ${ATHLETE_NAME} (${ATHLETE_AGE} anni, ${ATHLETE_HEIGHT} cm).
-Obiettivo dell'atleta: ${ATHLETE_TARGET}.
+    const systemPrompt = `Sei il Coach Hyrox, Nutrizionista Sportivo e Consulente di Fisiologia/Ortopedia dello Sport di Michele Gallone (34 anni, 189 cm, 99 kg).
 
 REGOLE FONDAMENTALI DI COMPORTAMENTO:
 1. RISPONDI RIGOROSAMENTE IN ITALIANO.
 2. REGOLA DEL SALUTO: ${greetingRule}
-3. CONCISO, DIRETTO E PRATICO (MASSIMA PRIORITÀ):
-   - Evita preamboli inutili o spiegazioni accademiche se non richieste.
-   - Sii conciso come un vero coach via chat: poche frasi chiare, dritte al punto.
-4. TONO PROFESSIONALE E SOBRIO: Calmo, autorevole, zero entusiasmo finto.
+3. CONCISO, DIRETTO E NATURALE (MASSIMA PRIORITÀ):
+   - Evita preamboli inutili o lezioni teoriche non richieste.
+   - Sii conciso, pragmatico e chiaro: come un vero coach/specialista in chat privata.
+4. TONO PROFESSIONALE E SOBRIO: Calmo, autorevole, zero entusiasmo finto (vietato 'carro armato', 'macchina da guerra', 'non ce ne frega niente').
 5. ZERO ASTERISCHI NEL TESTO: Non usare mai asterischi (* o **).
 6. ZERO TABELLE ASCII: Nessuna tabella con barre o trattini.
 7. CONCLUDI SEMPRE IL DISCORSO senza lasciarlo a metà.
 8. PERTINENZA ASSOLUTA:
-   - Rispondi sempre e solo a quello che l'atleta ti chiede.
-   - I dati BIA o le competenze ortopediche servono come tuo sfondo conoscitivo: tirali fuori SOLO in caso di domande esplicite.
+   - Rispondi sempre e solo a quello che Michele ti chiede.
+   - I dati BIA o le nozioni ortopediche servono come tuo bagaglio di competenze: tirali fuori SOLO quando Michele fa domande dirette a riguardo.
 
-LE TUE SPECIALIZZAZIONI SCIENTIFICHE (DA APPLICARE QUANDO PERTINENTE):
-- ORTOPEDIA DELLO SPORT & BIOMECCANICA CLINICA: protezione catena posteriore, carichi assiali sulla colonna, stabilità articolare (ginocchia/anche), gestione carichi ed esercizi alternativi sicuri.
-- BIOIMPEDENZIOMETRIA VETTORIALE (BIVA CLINICA): interpretazione Angolo di Fase (PhA), BCM (massa cellulare attiva), idratazione intra/extracellulare (ICW/ECW).
-- TELEMETRIA HYROX: gestione del ritmo (pacing) su SkiErg/Rower, cadenza di corsa per ridurre l'impatto articolare, transizioni rapide.
-- NUTRIZIONE SPORTIVA & MACRONUTRIENTI: calcolo e modulazione di proteine, carboidrati e idratazione in base ai workout.`;
+LE TUE SPECIALIZZAZIONI ED EXPERTISE (DA APPLICARE QUANDO PERTINENTE):
+1. ORTOPEDIA DELLO SPORT & BIOMECCANICA CLINICA (ANAMNESI CHIRURGICA DI MICHELE):
+   - Discectomia L5-S1 (a 20 anni): l'anello fibroso e lo spazio discale tra quinta lombare e prima sacrale hanno una resilienza elastica ridotta. Con 99 kg di stazza, i carichi assiali diretti (back squat pesante, military press pesante da in piedi) creano picchi di compressione discale e taglio anteriore. Prediligere lavoro in catena chiusa senza carico assiale (leg press bilaterale/unilaterale controllata, bulgarian split squat con manubri lungo i fianchi, hip thrust guidato). Per la de-compressione: trazioni alla sbarra con scarico del bacino, posizione a 90° psoas-relax, rinforzo profondo del muscolo trasverso dell'addome e multifido (core bracings).
+   - Meniscectomia parziale esterna ginocchio sx (operato due volte a 16 e 17 anni): il menisco laterale gestisce oltre il 70% del carico in rotazione e flessione dell'arto inferiore. Un ginocchio con meniscectomia parziale esterna è più vulnerabile a valgismo dinamico e usura cartilaginea femoro-tibiale laterale. Lavoro essenziale: rinforzo vasto mediale obliquo (VMO), gluteo medio (stabilità anca-ginocchio), mobilità caviglia per evitare compensi in eversione/valgismo durante la corsa.
+   - Pregressa asportazione tumore a cellule giganti tendine quadricipitale sx (2018): apparato estensore con cicatrice tendinea superiore alla rotula. Evitare stress eccessivi con angolo al ginocchio >90° sotto carico esplosivo senza riscaldamento. Isometria sul quadricipite (spanish squat, wall sit isonometrico) per migliorare la densità tendinea e la tolleranza al carico nelle stazioni Hyrox (Wall Balls, Burpees).
+
+2. BIOIMPEDENZIOMETRIA VETTORIALE (BIVA & AKERN CLINICA):
+   - PhA 8.8° e BCM 57.1 kg: elevata cellularità muscolare e ottima idratazione cellulare (ICW). Zero ritenzione infiammatoria extracellulare (ECW stabile).
+
+3. TELEMETRIA HYROX & PACING:
+   - Target Gara: SUB-1h 20m. Vantaggio biomeccanico su SkiErg/Rower (920-950 Cal/hr). Corsa 8x1000m a 5:00 min/km con cadenza 174-178 spm per ammortizzare l'impatto articolare sulla schiena e sul ginocchio sx.
+
+4. NUTRIZIONE SPORTIVA & INTEGRAZIONE:
+   - Apporto proteico ~180-200g/die per la stazza muscolare. Creatina 5g post-workout in acqua con carboidrati.`;
 
     // 1. Gestione Note Vocali
     if (msg.voice || msg.audio) {
@@ -318,7 +412,7 @@ LE TUE SPECIALIZZAZIONI SCIENTIFICHE (DA APPLICARE QUANDO PERTINENTE):
       const mime = msg.voice ? "audio/ogg" : (audioObj.mime_type || "audio/mp3");
 
       const parts = [
-        { text: `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\nNota vocale inviata. Ascolta e rispondi rimanendo coerente con la conversazione, con tono sobrio e senza tabelle o asterischi.` },
+        { text: `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\nMichele ti ha inviato una nota vocale. Ascolta e rispondi rimanendo coerente con la conversazione, con tono sobrio e senza tabelle o asterischi.` },
         { inlineData: { mimeType: mime, data: base64Audio } }
       ];
 
@@ -329,7 +423,7 @@ LE TUE SPECIALIZZAZIONI SCIENTIFICHE (DA APPLICARE QUANDO PERTINENTE):
       return new Response("OK", { status: 200 });
     }
 
-    // 2. Gestione Foto Piatti con diario Macro
+    // 2. Gestione Foto
     if (msg.photo && msg.photo.length > 0) {
       const photo = msg.photo[msg.photo.length - 1];
       const caption = msg.caption || "Analizza questo piatto e stima i macronutrienti";
@@ -349,11 +443,11 @@ LE TUE SPECIALIZZAZIONI SCIENTIFICHE (DA APPLICARE QUANDO PERTINENTE):
       const chatHistory = await getRecentChatHistory(chatId, 6);
       const todayMacros = await getTodayMacroSummary();
 
-      const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA. Didascalia: "${caption}".
-Se si tratta di cibo:
-1. Dai una stima concisa dei valori: Calorie, Carboidrati, Proteine, Grassi.
-2. Includi in fondo al messaggio un tag JSON nascosto nel formato: <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}--> per salvarlo nel diario.
-3. Zero asterischi e zero tabelle.`;
+      const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA DA MICHELE. Didascalia: "${caption}".
+Se si tratta di un pasto/cibo:
+1. Dai una stima chiara e diretta dei valori: Calorie, Carboidrati, Proteine, Grassi.
+2. Includi in fondo al messaggio un blocco JSON nascosto su una riga nel formato: <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}--> così che il sistema possa memorizzarlo automaticamente nel diario dei macro.
+3. Rimani sintetico, senza preamboli inutili, zero asterischi e zero tabelle.`;
 
       const parts = [
         { text: promptText },
@@ -362,6 +456,7 @@ Se si tratta di cibo:
 
       const rawReply = await callGemini(systemPrompt, parts);
 
+      // Estrazione del blocco MEAL se presente per salvarlo nel database Supabase
       const mealMatch = rawReply.match(/<!--MEAL:(\{.*?\})-->/);
       if (mealMatch) {
         try {
@@ -388,14 +483,16 @@ Se si tratta di cibo:
         }
       }
 
+      // Rimuoviamo il tag invisibile prima di inviare a Telegram
       const cleanReply = rawReply.replace(/<!--MEAL:.*?-->/g, "").trim();
+
       await sendTelegram(chatId, cleanReply);
       await recordChatMessage(chatId, "user", `[Foto]: ${caption}`);
       await recordChatMessage(chatId, "assistant", cleanReply);
       return new Response("OK", { status: 200 });
     }
 
-    // 3. Gestione File PDF (BIA automatica)
+    // 3. Gestione File Documento (PDF BIA automatico o file)
     if (msg.document) {
       const doc = msg.document;
       const docName = doc.file_name || "";
@@ -416,16 +513,16 @@ Se si tratta di cibo:
 
           const previousBia = await getSupabaseBia();
 
-          const biaPrompt = `Hai ricevuto un referto di Bioimpedenziometria (BIA) in formato PDF.
-STORICO BIA PRECEDENTI:
+          const biaPrompt = `Hai ricevuto un referto di Bioimpedenziometria (BIA Akern / BodygramPlus) in formato PDF da parte di Michele Gallone.
+STORICO BIA PRECEDENTI NEL DATABASE:
 ${previousBia}
 
 Compito:
-1. Estrai: Data esame, Peso (kg), PhA (°), BCM (kg), Grasso FM (kg e %), Massa Magra FFM (kg), Acqua TBW (L), ECW (L), Rz (Ohm), Xc (Ohm).
-2. Fornisci un'analisi differenziale chiara e sintetica rispetto agli esami precedenti.
-3. Includi in fondo al testo un tag JSON su una riga per salvarlo nel database:
+1. Estrai tutti i valori chiave: Data esame, Peso (kg), Angolo di Fase PhA (°), BCM (kg), Massa Grassa FM (kg e %), Massa Magra FFM (kg), Acqua Totale TBW (L), Acqua Extracellulare ECW (L), Resistenza Rz (Ohm), Reattanza Xc (Ohm).
+2. Fai un'analisi differenziale clinica chiara e concisa confrontando i nuovi dati con l'ultimo esame storico. Spiega l'impatto sul recupero, sulla massa muscolare e sulla preparazione Hyrox.
+3. Includi in fondo al testo un tag JSON su una riga con i dati estratti per salvarli nel database:
 <!--BIA:{"exam_date":"YYYY-MM-DD","weight_kg":99.0,"phase_angle":8.8,"bcm_kg":57.1,"fm_kg":11.4,"fm_percent":11.5,"ffm_kg":87.6,"tbw_liters":64.3,"ecw_liters":23.1,"rz_ohm":380,"xc_ohm":58}-->
-4. Zero asterischi e zero tabelle.`;
+4. Zero asterischi (* o **), zero tabelle ASCII. Stile sobrio, professionale e diretto.`;
 
           const parts = [
             { text: biaPrompt },
@@ -469,11 +566,44 @@ Compito:
       return new Response("OK", { status: 200 });
     }
 
-    // 4. Gestione Messaggio di Testo
+    // 4. Gestione Messaggio Testo & Comandi Telegram
     if (msg.text) {
-      const userText = msg.text;
+      let userText = msg.text.trim();
 
-      if (/male|dolore|infortunio|bloccato|strappo/i.test(userText)) {
+      // Risposte istantanee ai comandi dal menu di Telegram
+      if (userText === "/gara") {
+        userText = "Come imposto il pacing e la tabella di marcia per la gara Hyrox Open Men per chiudere tassativamente SUB 1 ora e 20 minuti? Dammi i tempi precisi stazioni per stazioni e corsa compresa la Roxzone.";
+      } else if (userText === "/recupero") {
+        userText = "Analizza i dati del mio orologio Huawei GT 6: come ho dormito stanotte e come sono la mia FC a riposo e la fatica oggi?";
+      } else if (userText === "/macro") {
+        userText = "Fammi un riepilogo dei pasti che ho registrato oggi e dimmi quante calorie e proteine mi mancano per arrivare a target.";
+      } else if (userText === "/allenamento") {
+        userText = "Che allenamento mi consigli di fare oggi tra FitSquare, forza o scarico aerobico?";
+      } else if (userText === "/mobilita") {
+        userText = "Dammi una routine rapida di mobilità articolare, allungamento e riscaldamento preventivo prima dell'allenamento.";
+      } else if (userText === "/aiuto" || userText === "/help") {
+        const helpMsg = "Ecco i comandi rapidi disponibili nel menu:\n\n" +
+          "/gara - Proiezione Pacing Hyrox SUB-1h 20m\n" +
+          "/recupero - Analisi sonno, FC a riposo e carico da Huawei GT 6\n" +
+          "/macro - Riepilogo pasti registrati oggi e target proteico\n" +
+          "/allenamento - Consigli su sessione odierna FitSquare o corsa\n" +
+          "/mobilita - Routine di mobilità e prevenzione articolare\n" +
+          "/aiuto - Questo messaggio informativo.\n\n" +
+          "Puoi anche inviarmi normalmente messaggi di testo, note vocali, foto di piatti o PDF di referti BIA.";
+        await sendTelegram(chatId, helpMsg);
+        return new Response("OK", { status: 200 });
+      }
+
+      // Se Michele scrive che la schiena o il dolore è passato/guarito, aggiorniamo il database per non parlarne più
+      if (/schiena passat|non mi fa pi[uù] male|dolore passat|schiena a posto|sto bene con la schiena/i.test(userText)) {
+        await fetch(`${SUPABASE_URL}/rest/v1/coach_memory?category=eq.infortuni`, {
+          method: "DELETE",
+          headers: {
+            apikey: SUPABASE_SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+          }
+        });
+      } else if (/male|dolore|infortunio|bloccato|strappo/i.test(userText)) {
         await fetch(`${SUPABASE_URL}/rest/v1/coach_memory`, {
           method: "POST",
           headers: {
@@ -491,24 +621,24 @@ Compito:
       const chatHistory = await getRecentChatHistory(chatId, 8);
       const todayMacros = await getTodayMacroSummary();
 
-      const promptText = `SCHEDA E DATI ATLETA:
+      const promptText = `SCHEDA E DATI ATLETA (da consultare se necessario, non ripetere a memoria se non richiesto):
 ${mem}
 ${bia}
 ${intervals}
 ${todayMacros}
 
-CRONOLOGIA RECENTE DELLA CHAT:
+CRONOLOGIA RECENTE DELLA CHAT (COSA VI SIETE DETTI FINORA):
 ${chatHistory}
 
-MESSAGGIO DELL'ATLETA A CUI DEVI RISPONDERE:
+ULTIMO MESSAGGIO DI MICHELE A CUI DEVI RISPONDERE:
 "${userText}"
 
 ISTRUZIONI PER LA RISPOSTA:
-1. Analizza la cronologia recente per capire esattamente il contesto del messaggio.
-2. Sii BREVE, DIRETTO E PRATICO: poche frasi essenziali.
-3. Se l'atleta chiede dell'ultimo allenamento, consulta i dati della telemetria sopra (passo, durata, FC media/max, calorie).
-4. Se chiede di pasti/macro, consulta il riepilogo giornaliero dei pasti registrati sopra.
-5. Non citare valori clinici o BIA a meno di specifica domanda.
+1. Analizza la cronologia per capire esattamente il filo logico.
+2. Sii BREVE, DIRETTO E PRATICO: niente giri di parole. Rispondi in poche righe essenziali, esattamente come scriverebbe un coach su Telegram.
+3. Se Michele chiede del suo ultimo allenamento, della corsa o del recupero, hai a disposizione la telemetria sincronizzata dal suo Huawei GT 6 nei dati sopra (durata, passo, FC media/max, calorie).
+4. Se Michele chiede cosa mangiare o dei macro, consulta il riepilogo pasti registrati oggi sopra per bilanciare proteine/carboidrati/calorie.
+5. Non citare i parametri BIA (BCM, PhA, litri d'acqua) a meno di esplicita domanda sull'esame.
 6. Zero asterischi e zero tabelle.`;
 
       const parts = [{ text: promptText }];
