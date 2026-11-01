@@ -44,6 +44,19 @@ CREATE TABLE IF NOT EXISTS public.morning_briefings (
     content TEXT
 );
 
+-- 2c. Tabella Tracciamento Carichi e Sessioni di Forza/Volume (Sala Pesi)
+CREATE TABLE IF NOT EXISTS public.strength_workouts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workout_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    exercise_name TEXT NOT NULL,
+    sets INT NOT NULL,
+    reps INT NOT NULL,
+    weight_kg NUMERIC NOT NULL,
+    rpe INT,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- 3. Tabella Memoria Clinica, Allenamento e Infortuni
 CREATE TABLE IF NOT EXISTS public.coach_memory (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
