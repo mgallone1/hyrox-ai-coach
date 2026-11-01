@@ -45,6 +45,125 @@ async function sendTelegram(chatId: number, text: string) {
   });
 }
 
+async function sendTelegramPhoto(chatId: number, photoUrl: string, caption: string) {
+  const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`;
+  await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption: caption })
+  });
+}
+
+async function sendTelegramVoice(chatId: number, text: string) {
+  try {
+    // Generiamo l'audio vocale in italiano usando le API text-to-speech
+    // Troncamento a 200 caratteri per messaggi vocali rapidi da coach
+    const shortText = text.slice(0, 300).replace(/[^\w\sàèéìòù,.]/gi, '');
+    const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(shortText)}&tl=it&client=tw-ob`;
+    const res = await fetch(ttsUrl);
+    if (res.ok) {
+      const audioBlob = await res.blob();
+      const formData = new FormData();
+      formData.append("chat_id", chatId.toString());
+      formData.append("voice", audioBlob, "coach_voice.mp3");
+      await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendVoice`, {
+        method: "POST",
+        body: formData
+      });
+    }
+  } catch (e) {
+    console.error("TTS voice error", e);
+  }
+}
+
+async function isVoiceEnabled(): Promise<boolean> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/coach_memory?category=eq.impostazioni&fact=like.*VOCE_ATTIVA*`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data && data.length > 0;
+    }
+  } catch (e) {
+    console.error("Voice check error", e);
+  }
+  return false;
+}
+
+async function generateBiaChartUrl(): Promise<string> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/bia_records?select=exam_date,weight_kg,bcm_kg,phase_angle,fm_kg&order=exam_date.asc`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+    if (res.ok) {
+      const records = await res.json();
+      if (records && records.length > 0) {
+        const labels = records.map((r: any) => r.exam_date.substring(5)); // 'MM-DD'
+        const bcmData = records.map((r: any) => r.bcm_kg);
+        const phaData = records.map((r: any) => r.phase_angle);
+        const weightData = records.map((r: any) => r.weight_kg);
+
+        const chartConfig = {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'BCM Massa Cellulare (kg)',
+                data: bcmData,
+                borderColor: '#22c55e',
+                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                fill: false,
+                yAxisID: 'y'
+              },
+              {
+                label: 'PhA Angolo di Fase (°)',
+                data: phaData,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: false,
+                yAxisID: 'y1'
+              },
+              {
+                label: 'Peso Totale (kg)',
+                data: weightData,
+                borderColor: '#eab308',
+                borderDash: [5, 5],
+                fill: false,
+                yAxisID: 'y'
+              }
+            ]
+          },
+          options: {
+            title: {
+              display: true,
+              text: 'Evoluzione Composizione Corporea Akern BIA (Michele Gallone)'
+            },
+            scales: {
+              yAxes: [
+                { id: 'y', position: 'left', scaleLabel: { display: true, labelString: 'Kg' } },
+                { id: 'y1', position: 'right', scaleLabel: { display: true, labelString: 'Gradi (°)' }, gridLines: { drawOnChartArea: false } }
+              ]
+            }
+          }
+        };
+
+        return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=600&h=350&bkg=white`;
+      }
+    }
+  } catch (e) {
+    console.error("Chart gen error", e);
+  }
+  return "";
+}
+
 async function getLastMessageTime(chatId: number): Promise<Date | null> {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/chat_messages?chat_id=eq.${chatId}&order=created_at.desc&limit=1`, {
@@ -290,15 +409,21 @@ async function checkAndSendMorningBriefing(chatId: number) {
           const ctl = Math.round(todayWellness.ctl || 0);
           const atl = Math.round(todayWellness.atl || 0);
 
+          // Alert Sovrallenamento: se FC a riposo è alta (>52 bpm) o sonno insufficiente
+          let overtrainingAlert = "";
+          if (rhr >= 52 || score < 65) {
+            overtrainingAlert = "\nALERT RECUPERO: La frequenza cardiaca a riposo è elevata (+3-4 bpm sopra baseline) o il sonno non è stato profondo. Sistema nervoso simpatico ancora attivo: oggi prediligi volume aerobico Z2 leggero o riposo, evitando massimali o intensità anaerobica.";
+          }
+
           const prompt = `L'orologio Huawei Watch GT 6 ha appena rilevato il risveglio di Michele e sincronizzato i dati della notte:
 - Sonno: ${sleepHours} ore e ${sleepMins} minuti (Punteggio qualità ${score})
 - FC a riposo: ${rhr} bpm (baseline tipica 48-50 bpm)
 - Carico Fitness (CTL): ${ctl}, Fatica acuta (ATL): ${atl}
-- Stato infortunio: convalescenza acuta zona lombare da squat venerdì (operato L5-S1 pregresso).
+${overtrainingAlert}
 
 Genera il Morning Briefing del risveglio per Michele:
-1. Valutazione sintetica del recupero notturno (stato del sistema nervoso autonomo e sonno).
-2. Indicazione pratica per la giornata: focus su idratazione (target 4L), assunzione creatina post-allenamento/pranzo, e attenzione posturale/scarico colonna per oggi.
+1. Valutazione sintetica del recupero notturno (stato del sistema nervoso autonomo e sonno). Se c'è affaticamento, segnalalo chiaramente.
+2. Indicazione pratica per la giornata: focus su idratazione (target 4L), assunzione creatina e gestione dei carichi per oggi.
 3. Tono sobrio, diretto, amichevole ma senza entusiasmo finto. Massimo 6-8 righe. Zero asterischi (* o **) e zero tabelle.`;
 
           const briefingText = await callGemini("Sei il Coach Hyrox e Nutrizionista Sportivo personale di Michele Gallone.", [{ text: prompt }]);
@@ -574,13 +699,48 @@ Compito:
       if (userText === "/gara") {
         userText = "Come imposto il pacing e la tabella di marcia per la gara Hyrox Open Men per chiudere tassativamente SUB 1 ora e 20 minuti? Dammi i tempi precisi stazioni per stazioni e corsa compresa la Roxzone.";
       } else if (userText === "/recupero") {
-        userText = "Analizza i dati del mio orologio Huawei GT 6: come ho dormito stanotte e come sono la mia FC a riposo e la fatica oggi?";
+        userText = "Analizza i dati del mio orologio Huawei GT 6: come ho dormito stanotte e come sono la mia FC a riposo e la fatica oggi? Segnalami se ci sono rischi di sovrallenamento.";
       } else if (userText === "/macro") {
         userText = "Fammi un riepilogo dei pasti che ho registrato oggi e dimmi quante calorie e proteine mi mancano per arrivare a target.";
       } else if (userText === "/allenamento") {
         userText = "Che allenamento mi consigli di fare oggi tra FitSquare, forza o scarico aerobico?";
       } else if (userText === "/mobilita") {
         userText = "Dammi una routine rapida di mobilità articolare, allungamento e riscaldamento preventivo prima dell'allenamento.";
+      } else if (userText === "/grafico") {
+        const chartUrl = await generateBiaChartUrl();
+        if (chartUrl) {
+          await sendTelegramPhoto(chatId, chartUrl, "Ecco il grafico del tuo andamento di composizione corporea (BIA Akern): crescita della massa cellulare attiva (BCM) e dell'angolo di fase (PhA).");
+          await recordChatMessage(chatId, "user", "/grafico");
+          await recordChatMessage(chatId, "assistant", "[Grafico BIA inviato]");
+          return new Response("OK", { status: 200 });
+        } else {
+          await sendTelegram(chatId, "Non ho trovato abbastanza esami BIA per generare il grafico.");
+          return new Response("OK", { status: 200 });
+        }
+      } else if (userText === "/voce") {
+        const voiceActive = await isVoiceEnabled();
+        if (voiceActive) {
+          await fetch(`${SUPABASE_URL}/rest/v1/coach_memory?category=eq.impostazioni&fact=like.*VOCE_ATTIVA*`, {
+            method: "DELETE",
+            headers: {
+              apikey: SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+            }
+          });
+          await sendTelegram(chatId, "Risposte vocali DISATTIVATE. Ora risponderò solo con messaggi di testo.");
+        } else {
+          await fetch(`${SUPABASE_URL}/rest/v1/coach_memory`, {
+            method: "POST",
+            headers: {
+              apikey: SUPABASE_SERVICE_ROLE_KEY,
+              Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ category: "impostazioni", fact: "VOCE_ATTIVA: invia anche nota vocale", importance: 5 })
+          });
+          await sendTelegram(chatId, "Risposte vocali ATTIVATE! Da adesso riceverai anche un messaggio audio del coach insieme al testo.");
+        }
+        return new Response("OK", { status: 200 });
       } else if (userText === "/aiuto" || userText === "/help") {
         const helpMsg = "Ecco i comandi rapidi disponibili nel menu:\n\n" +
           "/gara - Proiezione Pacing Hyrox SUB-1h 20m\n" +
@@ -644,6 +804,13 @@ ISTRUZIONI PER LA RISPOSTA:
       const parts = [{ text: promptText }];
       const reply = await callGemini(systemPrompt, parts);
       await sendTelegram(chatId, reply);
+
+      // Se le risposte vocali sono attive, invia anche la nota vocale audio
+      const voiceActive = await isVoiceEnabled();
+      if (voiceActive) {
+        await sendTelegramVoice(chatId, reply);
+      }
+
       await recordChatMessage(chatId, "user", userText);
       await recordChatMessage(chatId, "assistant", reply);
       return new Response("OK", { status: 200 });
