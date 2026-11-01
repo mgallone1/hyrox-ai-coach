@@ -591,10 +591,19 @@ LE TUE SPECIALIZZAZIONI ED EXPERTISE (DA APPLICARE QUANDO PERTINENTE):
       const todayMacros = await getTodayMacroSummary();
 
       const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA DA MICHELE. Didascalia: "${caption}".
-Se si tratta di un pasto/cibo:
-1. Dai una stima chiara e diretta dei valori: Calorie, Carboidrati, Proteine, Grassi.
-2. Includi in fondo al messaggio un blocco JSON nascosto su una riga nel formato: <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}--> così che il sistema possa memorizzarlo automaticamente nel diario dei macro.
-3. Rimani sintetico, senza preamboli inutili, zero asterischi e zero tabelle.`;
+
+COMPITO:
+1. SE LA FOTO È UN PIATTO O CIBO:
+   - Stima chiara e diretta dei valori: Calorie, Carboidrati, Proteine, Grassi.
+   - Includi in fondo al messaggio un blocco JSON nascosto su una riga: <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}--> per salvarlo nel diario.
+
+2. SE LA FOTO È UNO SCREENSHOT DI FIT SQUARE / HYROX / CROSSFIT (WOD, circuito, lavagna o scheda di allenamento):
+   - Leggi e decodifica tutti gli esercizi del circuito (stazioni, carichi in kg, ripetizioni, tempi o round AMRAP/EMOM).
+   - Analizza la fattibilità per Michele tenendo conto della stazza (99 kg) e delle protezioni articolari (discectomia L5-S1 e ginocchio sx operato).
+   - Dai la strategia di pacing (come gestire il ritmo cardiaco, dove spingere e dove risparmiarsi) e le eventuali alternative sicure se c'è un esercizio rischioso.
+   - Salva gli esercizi nel database di forza includendo in fondo: <!--STRENGTH:[{"exercise":"Nome Esercizio","sets":4,"reps":10,"weight":50}]--> se sono presenti carichi/serie.
+
+3. Stile: Diretto, sintetico, professionale, zero asterischi e zero tabelle.`;
 
       const parts = [
         { text: promptText },
@@ -630,8 +639,38 @@ Se si tratta di un pasto/cibo:
         }
       }
 
-      // Rimuoviamo il tag invisibile prima di inviare a Telegram
-      const cleanReply = rawReply.replace(/<!--MEAL:.*?-->/g, "").trim();
+      // Estrazione del blocco STRENGTH se presente dalla foto
+      const strengthMatch = rawReply.match(/<!--STRENGTH:(\[.*?\])-->/);
+      if (strengthMatch) {
+        try {
+          const list = JSON.parse(strengthMatch[1]);
+          const today = new Date().toISOString().split("T")[0];
+          for (const item of list) {
+            await fetch(`${SUPABASE_URL}/rest/v1/strength_workouts`, {
+              method: "POST",
+              headers: {
+                apikey: SUPABASE_SERVICE_ROLE_KEY,
+                Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                workout_date: today,
+                exercise_name: item.exercise || "Esercizio WOD",
+                sets: item.sets || 1,
+                reps: item.reps || 0,
+                weight_kg: item.weight || 0,
+                notes: "Estratto da screenshot FitSquare"
+              })
+            });
+          }
+        } catch (e) {
+          console.error("Strength from photo error", e);
+        }
+      }
+
+      // Rimuoviamo i tag invisibili prima di inviare a Telegram
+      let cleanReply = rawReply.replace(/<!--MEAL:.*?-->/g, "");
+      cleanReply = cleanReply.replace(/<!--STRENGTH:.*?-->/g, "").trim();
 
       await sendTelegram(chatId, cleanReply);
       await recordChatMessage(chatId, "user", `[Foto]: ${caption}`);
