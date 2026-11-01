@@ -258,6 +258,28 @@ async function getSupabaseBia(): Promise<string> {
   return "";
 }
 
+async function getRecentStrengthWorkouts(): Promise<string> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/strength_workouts?select=*&order=workout_date.desc,created_at.desc&limit=15`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+    if (res.ok) {
+      const records = await res.json();
+      if (records && records.length > 0) {
+        return "ULTIMI CARICHI REGISTRATI IN PALESTRA:\n" + records.map((r: any) =>
+          `- ${r.workout_date} [${r.exercise_name}]: ${r.sets}x${r.reps} con ${r.weight_kg} kg ${r.rpe ? `(RPE ${r.rpe})` : ''} ${r.notes ? `- Note: ${r.notes}` : ''}`
+        ).join("\n");
+      }
+    }
+  } catch (e) {
+    console.error("Strength fetch error", e);
+  }
+  return "Nessun carico di forza/volume ancora registrato.";
+}
+
 async function getIntervalsRecent(): Promise<string> {
   try {
     const authHeader = "Basic " + btoa("API_KEY:" + INTERVALS_KEY);
@@ -696,7 +718,9 @@ Compito:
       let userText = msg.text.trim();
 
       // Risposte istantanee ai comandi dal menu di Telegram
-      if (userText === "/gara") {
+      if (userText === "/forza") {
+        userText = "Oggi faccio la sessione settimanale di pura forza e volume in sala pesi (panca piana, rematore, spalle/alzate laterali, gambe/squat). Analizza lo storico dei carichi precedenti registrati, dammi gli obiettivi di sovraccarico progressivo per oggi e i consigli di biomeccanica e protezione articolare (L5-S1 e ginocchio sx).";
+      } else if (userText === "/gara") {
         userText = "Come imposto il pacing e la tabella di marcia per la gara Hyrox Open Men per chiudere tassativamente SUB 1 ora e 20 minuti? Dammi i tempi precisi stazioni per stazioni e corsa compresa la Roxzone.";
       } else if (userText === "/recupero") {
         userText = "Analizza i dati del mio orologio Huawei GT 6: come ho dormito stanotte e come sono la mia FC a riposo e la fatica oggi? Segnalami se ci sono rischi di sovrallenamento.";
@@ -780,12 +804,14 @@ Compito:
       const intervals = await getIntervalsRecent();
       const chatHistory = await getRecentChatHistory(chatId, 8);
       const todayMacros = await getTodayMacroSummary();
+      const strengthHistory = await getRecentStrengthWorkouts();
 
       const promptText = `SCHEDA E DATI ATLETA (da consultare se necessario, non ripetere a memoria se non richiesto):
 ${mem}
 ${bia}
 ${intervals}
 ${todayMacros}
+${strengthHistory}
 
 CRONOLOGIA RECENTE DELLA CHAT (COSA VI SIETE DETTI FINORA):
 ${chatHistory}
@@ -796,13 +822,49 @@ ULTIMO MESSAGGIO DI MICHELE A CUI DEVI RISPONDERE:
 ISTRUZIONI PER LA RISPOSTA:
 1. Analizza la cronologia per capire esattamente il filo logico.
 2. Sii BREVE, DIRETTO E PRATICO: niente giri di parole. Rispondi in poche righe essenziali, esattamente come scriverebbe un coach su Telegram.
-3. Se Michele chiede del suo ultimo allenamento, della corsa o del recupero, hai a disposizione la telemetria sincronizzata dal suo Huawei GT 6 nei dati sopra (durata, passo, FC media/max, calorie).
-4. Se Michele chiede cosa mangiare o dei macro, consulta il riepilogo pasti registrati oggi sopra per bilanciare proteine/carboidrati/calorie.
-5. Non citare i parametri BIA (BCM, PhA, litri d'acqua) a meno di esplicita domanda sull'esame.
-6. Zero asterischi e zero tabelle.`;
+3. Se Michele ti riporta carichi, serie e ripetizioni di palestra/forza (es. "panca 4x8 con 80kg, rematore 4x10 con 70kg"):
+   - Conferma i carichi e dai un commento tecnico rapido sul sovraccarico progressivo.
+   - Includi in fondo al testo un tag JSON nascosto nel formato: <!--STRENGTH:[{"exercise":"Panca Piana","sets":4,"reps":8,"weight":80},{"exercise":"Rematore","sets":4,"reps":10,"weight":70}]--> così che il sistema registri i dati in automatico nel diario di forza.
+4. Se Michele usa il comando /forza o chiede della seduta di volume/ipertrofia, consulta i carichi registrati nello storico sopra per suggerirgli la progressione di peso e le accortezze di setup articolare.
+5. Se Michele chiede del suo ultimo allenamento, della corsa o del recupero, consulta i dati della telemetria sopra.
+6. Se Michele chiede cosa mangiare o dei macro, consulta il riepilogo pasti registrati oggi sopra.
+7. Zero asterischi e zero tabelle.`;
 
       const parts = [{ text: promptText }];
-      const reply = await callGemini(systemPrompt, parts);
+      const rawReply = await callGemini(systemPrompt, parts);
+
+      // Estrazione del blocco STRENGTH se presente per salvarlo nel database Supabase
+      const strengthMatch = rawReply.match(/<!--STRENGTH:(\[.*?\])-->/);
+      if (strengthMatch) {
+        try {
+          const list = JSON.parse(strengthMatch[1]);
+          const today = new Date().toISOString().split("T")[0];
+          for (const item of list) {
+            await fetch(`${SUPABASE_URL}/rest/v1/strength_workouts`, {
+              method: "POST",
+              headers: {
+                apikey: SUPABASE_SERVICE_ROLE_KEY,
+                Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                workout_date: today,
+                exercise_name: item.exercise || "Esercizio",
+                sets: item.sets || 0,
+                reps: item.reps || 0,
+                weight_kg: item.weight || 0,
+                rpe: item.rpe || null,
+                notes: item.notes || null
+              })
+            });
+          }
+        } catch (e) {
+          console.error("Strength record error", e);
+        }
+      }
+
+      const reply = rawReply.replace(/<!--STRENGTH:.*?-->/g, "").trim();
+
       await sendTelegram(chatId, reply);
 
       // Se le risposte vocali sono attive, invia anche la nota vocale audio
