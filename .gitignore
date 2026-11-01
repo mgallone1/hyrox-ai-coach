@@ -1,0 +1,25 @@
+# File di configurazione e segreti (NON CONDIVIDERE MAI SU GITHUB)
+.env
+.env.local
+*.env
+supabase/.env
+
+# Node & package manager
+node_modules/
+package-lock.json
+
+# Log e file temporanei
+*.log
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+
+# Dati personali e referti privati
+*.pdf
+*.docx
+*.xlsx
+*.csv
+*.png
+*.jpg
+*.jpeg
