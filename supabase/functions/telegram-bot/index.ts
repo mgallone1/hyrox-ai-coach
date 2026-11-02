@@ -592,17 +592,17 @@ async function checkAndSendProactiveNudge(chatId: number) {
     let slotTheme = "";
 
     if (itHours === 10 && itMins >= 15 && itMins <= 55) {
-      currentSlot = "mid_morning_posture";
-      slotTheme = "Pausa attiva lavoro al PC a metà mattina: de-compressione lombare seduta, mobilità dell'anca/psoas per chi lavora al computer, focus idratazione cellulare (raggiungere 1.5L), focus visivo/posturale.";
+      currentSlot = "mid_morning_mind_body";
+      slotTheme = "Metà mattina al PC (Mente, Visione e Fisiologia): affaticamento visivo da schermo (regola 20-20-20 per i muscoli oculari e luce naturale), micro-reset cognitivo per ricaricare l'attenzione profonda senza zuccheri, respirazione nasale ossigenante, postura delle spalle rilassate per evitare tensioni cervicali da tastiera/mouse.";
     } else if (itHours === 14 && itMins >= 15 && itMins <= 55) {
-      currentSlot = "early_afternoon_focus";
-      slotTheme = "Gestione post-prandiale e prevenzione sonnolenza post-pranzo al PC: respirazione diaframmatica per il sistema nervoso, postura cervicale/spalle alla scrivania, idratazione pre-allenamento.";
+      currentSlot = "early_afternoon_energy";
+      slotTheme = "Primo pomeriggio alla scrivania (Biohacking della concentrazione & Ritmi Circadiani): gestione del calo di dopamina/adenosina pomeridiana, micro-esposizione alla luce, temperatura corporea e idratazione elettrolitica (non solo acqua ma equilibrio salino per la lucidità mentale nel lavoro).";
     } else if (itHours === 16 && itMins >= 30 && itMins <= 59) {
-      currentSlot = "pre_workout_fuel";
-      slotTheme = "Finestra pre-workout verso le 18:00: attivazione mentale, ultimo spuntino glucidico leggero per riempire il glicogeno senza appesantire la digestione, stop all'acqua abbondante per non avere la vescica piena al WOD, priming delle caviglie e del core prima di staccare dal lavoro.";
+      currentSlot = "pre_workout_transition";
+      slotTheme = "Transizione mentale da sedentario a persona attiva (ore 16:30-17:00): staccare il loop mentale dei problemi di lavoro/schermi, transizione del sistema nervoso verso la reattività, timing nutrizionale leggero ed energizzante senza appesantire la digestione.";
     } else if (itHours === 21 && itMins >= 0 && itMins <= 55) {
-      currentSlot = "evening_recovery";
-      slotTheme = "Recupero serale profondo e scarico della colonna a letto/tappetino: posizione 90° psoas-relax per L5-S1, disattivazione della luce blu dagli schermi del PC/telefono, abbassamento della temperatura corporea per favorire il sonno profondo e l'HRV.";
+      currentSlot = "evening_sleep_architecture";
+      slotTheme = "Serata, Benessere e Qualità della Vita (Architettura del Sonno & Disconnessione): spegnimento graduale dell'iperstimolazione sensoriale da monitor/TV, gestione della luce calda/soffusa, igiene dell'aria nella stanza, distacco mentale dalle incombenze quotidiane e relax somatico profondo.";
     }
 
     if (!currentSlot) return;
@@ -620,15 +620,22 @@ async function checkAndSendProactiveNudge(chatId: number) {
       if (data && data.length > 0) return; // Già inviato per oggi
     }
 
-    const nudgePrompt = `Sei il Coach personale e consulente di salute integrata di Michele Gallone (34 anni, 189 cm, 99 kg, programmatore/lavora al PC tutto il giorno sedentario, si allena alle 18:00, operato L5-S1 e menisco sx).
+    const nudgePrompt = `Sei il Consulente personale di Performance Umana, Salute Integrata e Stile di Vita di Michele Gallone (34 anni, lavora al PC tutto il giorno sedentario, si allena la sera, tiene alla sua salute fisica e mentale a 360 gradi).
 MOMENTO DELLA GIORNATA: ${slotTheme}
 
-COMPITO:
-Invia a Michele un consiglio proattivo di altissimo valore, concreto, creativo ma sempre posato, sobrio e professionale (niente fuffa o motivazione da social, zero frasi banali come 'ricordati di bere').
-Dagli un'azione da fare in 60-120 secondi:
-- Può riguardare la postura alla sedia, il respiro per abbassare il cortisolo, una tecnica di de-compressione da fare vicino alla scrivania, l'ottimizzazione del carburante o la preparazione al sonno.
-- Tono: calmo, intelligente, da vero specialista d'élite che si prende cura della persona a 360 gradi.
-- Lunghezza: 4-6 righe incisive. Zero asterischi (* o **), zero tabelle.`;
+OBIETTIVO DEL CONSIGLIO:
+Michele ti ha chiesto espressamente: 'voglio consigli non solo sportivi, cose da applicare belle, creative ma non pazze, professionali e posate. Lavoro al pc tutto il giorno sedentario'.
+I tuoi consigli devono spaziare su TUTTI gli aspetti del benessere quotidiano:
+- Neuroscienze applicate & focus cognitivo (es. gestione della stanchezza visiva da schermo, reset attentivo, ritmi circadiani).
+- Ottimizzazione energetica e biohacking naturale (es. micro-respirazione per il sistema nervoso, temperatura, luce, idratazione cellulare).
+- Comfort posturale ed ergonomia invisibile (come non accumulare rigidità alla sedia senza dover fare per forza stretching sportivo).
+- Architettura del sonno e disconnessione serale dallo stress mentale lavorativo.
+
+REGOLE RIGIDE:
+1. NIENTE gergo da palestra, niente tabelle di workout, niente fuffa motivazionale da social.
+2. Dai 1 sola micro-azione concreta, elegante, intelligente e applicabile subito in 60-90 secondi.
+3. Tono: Pacato, intelligente, posato, raffinato, da scienziato/consulente personale di alto livello.
+4. Lunghezza: 4-6 righe pulite. Zero asterischi (* o **), zero elenchi puntati o tabelle.`;
 
     const nudgeText = await callGemini("Sei il Coach personale di Michele Gallone.", [{ text: nudgePrompt }]);
 
