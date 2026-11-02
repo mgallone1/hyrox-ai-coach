@@ -399,6 +399,102 @@ async function callGemini(systemPrompt: string, parts: any[]): Promise<string> {
   return "C'è stato un rallentamento momentaneo, riprova tra 3 secondi!";
 }
 
+async function checkAndSendWorkoutSummary(chatId: number) {
+  try {
+    const authHeader = "Basic " + btoa("API_KEY:" + INTERVALS_KEY);
+    const today = new Date().toISOString().split("T")[0];
+    const past = new Date(Date.now() - 2 * 86400000).toISOString().split("T")[0];
+
+    const actRes = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/activities?oldest=${past}&newest=${today}`, {
+      headers: { Authorization: authHeader }
+    });
+    if (!actRes.ok) return;
+
+    const actList = await actRes.json();
+    if (!actList || actList.length === 0) return;
+
+    // Filtriamo gli allenamenti di oggi o delle ultime 6 ore
+    const recentActs = actList.filter((a: any) => {
+      const actTime = new Date(a.start_date_local).getTime();
+      return (Date.now() - actTime) < 6 * 3600 * 1000;
+    });
+
+    if (recentActs.length === 0) return;
+
+    // Controlliamo quali attività sono già state notificate
+    const procRes = await fetch(`${SUPABASE_URL}/rest/v1/processed_activities?select=id`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+    const processedIds = new Set<string>();
+    if (procRes.ok) {
+      const data = await procRes.json();
+      data.forEach((p: any) => processedIds.add(p.id));
+    }
+
+    const unnotified = recentActs.filter((a: any) => !processedIds.has(a.id));
+    if (unnotified.length === 0) return;
+
+    // Raggruppiamo tutte le attività svolte nella stessa finestra oraria (entro 2 ore l'una dall'altra)
+    // es. Sessione Palestra/Forza + HIIT/Hyrox
+    let totalMovingSecs = 0;
+    let totalCalories = 0;
+    let maxHrEver = 0;
+    let detailsList: string[] = [];
+
+    for (const act of unnotified) {
+      totalMovingSecs += (act.moving_time || 0);
+      totalCalories += (act.calories || 0);
+      if (act.max_heartrate && act.max_heartrate > maxHrEver) {
+        maxHrEver = act.max_heartrate;
+      }
+      const movingMins = Math.floor((act.moving_time || 0) / 60);
+      const movingSecs = (act.moving_time || 0) % 60;
+      const distKm = act.distance ? `${(act.distance / 1000).toFixed(2)} km` : "N/D";
+      detailsList.push(`- ${act.name || act.type} (iniziato alle ${act.start_date_local?.substring(11, 16)}): Durata ${movingMins}m ${movingSecs}s, Distanza ${distKm}, FC media ${act.average_heartrate || 'N/D'} bpm (max ${act.max_heartrate || 'N/D'} bpm), Calorie ${act.calories || 0} kcal.`);
+    }
+
+    const totMins = Math.floor(totalMovingSecs / 60);
+    const summaryPrompt = `Michele ha appena terminato la sessione di allenamento con il suo smartwatch Huawei Watch GT 6 (sincronizzato su Intervals.icu).
+ALLENAMENTI SVOLTI NELLA STESSA SESSIONE (${unnotified.length} blocchi combinati):
+${detailsList.join("\n")}
+TOTALE COMBINATO: Durata ${totMins} minuti, Calorie bruciate ${totalCalories} kcal, FC max raggiunta ${maxHrEver} bpm.
+
+Compito da Coach e Nutrizionista Sportivo:
+1. Fai un debriefing unico, combinato e integrato della sessione appena conclusa (se ci sono 2 o più blocchi come palestra + HIIT, commenta come hanno interagito).
+2. Valuta il dispendio energetico e la risposta cardiaca (frequenza media/picco rispetto alla soglia anaerobica).
+3. Dai indicazioni immediate per il POST-WORKOUT di stasera:
+   - Idratazione da reintegrare.
+   - Timing e quantità di proteine (target ~40-50g a cena) e carboidrati per ripristinare il glicogeno dei 57 kg di BCM.
+   - Assunzione dei 5g di creatina se non ancora presi.
+   - De-compressione lombare e scarico articolare post-allenamento.
+4. Tono sobrio, diretto, incisivo. Zero asterischi (* o **), zero tabelle ASCII. Massimo 8-10 righe.`;
+
+    const summaryText = await callGemini("Sei il Coach Hyrox e Nutrizionista Sportivo personale di Michele Gallone.", [{ text: summaryPrompt }]);
+
+    await sendTelegram(chatId, `Debriefing Post-Allenamento:\n\n${summaryText}`);
+
+    // Segniamo tutte le attività come processate nel database
+    for (const act of unnotified) {
+      await fetch(`${SUPABASE_URL}/rest/v1/processed_activities`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ id: act.id })
+      });
+    }
+
+    await recordChatMessage(chatId, "assistant", `[Debriefing Post-Allenamento Combinato]: ${summaryText}`);
+  } catch (e) {
+    console.error("Workout summary error", e);
+  }
+}
+
 async function checkAndSendMorningBriefing(chatId: number) {
   try {
     const today = new Date().toISOString().split("T")[0];
@@ -437,20 +533,20 @@ async function checkAndSendMorningBriefing(chatId: number) {
           const ctl = Math.round(todayWellness.ctl || 0);
           const atl = Math.round(todayWellness.atl || 0);
 
-          // Alert Sovrallenamento: se FC a riposo è alta (>52 bpm) o sonno insufficiente
+          // Alert Sovrallenamento: se FC a riposo è alta (>52 bpm) o sonno insufficiente (solo se il punteggio è stato effettivamente calcolato > 0)
           let overtrainingAlert = "";
-          if (rhr >= 52 || score < 65) {
+          if (rhr >= 52 || (score > 0 && score < 65)) {
             overtrainingAlert = "\nALERT RECUPERO: La frequenza cardiaca a riposo è elevata (+3-4 bpm sopra baseline) o il sonno non è stato profondo. Sistema nervoso simpatico ancora attivo: oggi prediligi volume aerobico Z2 leggero o riposo, evitando massimali o intensità anaerobica.";
           }
 
-          const prompt = `L'orologio Huawei Watch GT 6 ha appena rilevato il risveglio di Michele e sincronizzato i dati della notte:
-- Sonno: ${sleepHours} ore e ${sleepMins} minuti (Punteggio qualità ${score})
+          const prompt = `L'orologio Huawei Watch GT 6 ha rilevato il risveglio di Michele:
+- Sonno registrato: ${sleepHours} ore e ${sleepMins} minuti${score > 0 ? ` (Punteggio qualità ${score})` : ' (in fase di sincronizzazione punteggio)'}
 - FC a riposo: ${rhr} bpm (baseline tipica 48-50 bpm)
 - Carico Fitness (CTL): ${ctl}, Fatica acuta (ATL): ${atl}
 ${overtrainingAlert}
 
 Genera il Morning Briefing del risveglio per Michele:
-1. Valutazione sintetica del recupero notturno (stato del sistema nervoso autonomo e sonno). Se c'è affaticamento, segnalalo chiaramente.
+1. Valutazione sintetica del recupero notturno basata sulle ore effettive di sonno e sulla FC a riposo. Non dare punteggio zero se le ore di sonno sono normali (oltre 6 ore).
 2. Indicazione pratica per la giornata: focus su idratazione (target 4L), assunzione creatina e gestione dei carichi per oggi.
 3. Tono sobrio, diretto, amichevole ma senza entusiasmo finto. Massimo 6-8 righe. Zero asterischi (* o **) e zero tabelle.`;
 
@@ -497,8 +593,11 @@ serve(async (req) => {
 
     const chatId = msg.chat.id;
 
-    // Check automatico: se Huawei ha caricato i dati del risveglio e non è ancora stato inviato il briefing odierno
+    // Check automatico risveglio: invio Morning Briefing se disponibile
     await checkAndSendMorningBriefing(chatId);
+
+    // Check automatico post-workout: rileva nuovi allenamenti e li unisce in un unico debriefing
+    await checkAndSendWorkoutSummary(chatId);
 
     const lastTime = await getLastMessageTime(chatId);
     let shouldGreet = true;
