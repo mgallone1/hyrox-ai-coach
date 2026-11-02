@@ -184,9 +184,10 @@ async function getLastMessageTime(chatId: number): Promise<Date | null> {
   return null;
 }
 
-async function getRecentChatHistory(chatId: number, limit: number = 8): Promise<string> {
+async function getRecentChatHistory(chatId: number, daysBack: number = 30, maxMessages: number = 60): Promise<string> {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/chat_messages?chat_id=eq.${chatId}&order=created_at.desc&limit=${limit}`, {
+    const sinceDate = new Date(Date.now() - daysBack * 86400000).toISOString();
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/chat_messages?chat_id=eq.${chatId}&created_at=gte.${sinceDate}&order=created_at.desc&limit=${maxMessages}`, {
       headers: {
         apikey: SUPABASE_SERVICE_ROLE_KEY,
         Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
@@ -197,7 +198,12 @@ async function getRecentChatHistory(chatId: number, limit: number = 8): Promise<
       if (data && data.length > 0) {
         // Invertiamo l'ordine cronologico (dal più vecchio al più recente)
         const reversed = data.reverse();
-        return reversed.map((m: any) => `${m.role === 'user' ? 'Michele' : 'Coach'}: ${m.content}`).join("\n\n");
+        return reversed.map((m: any) => {
+          const d = new Date(m.created_at);
+          const dateStr = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+          const speaker = m.role === 'user' ? 'Michele' : 'Coach';
+          return `[${dateStr}] ${speaker}: ${m.content}`;
+        }).join("\n\n");
       }
     }
   } catch (e) {
@@ -555,11 +561,11 @@ LE TUE SPECIALIZZAZIONI ED EXPERTISE (DA APPLICARE QUANDO PERTINENTE):
       const base64Audio = btoa(binary);
 
       const mem = await getSupabaseMemory();
-      const chatHistory = await getRecentChatHistory(chatId, 6);
+      const chatHistory = await getRecentChatHistory(chatId, 30, 60);
       const mime = msg.voice ? "audio/ogg" : (audioObj.mime_type || "audio/mp3");
 
       const parts = [
-        { text: `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\nMichele ti ha inviato una nota vocale. Ascolta e rispondi rimanendo coerente con la conversazione, con tono sobrio e senza tabelle o asterischi.` },
+        { text: `DATI ATLETA:\n${mem}\n\nCRONOLOGIA COMPLETA DEGLI ULTIMI 30 GIORNI (CON DATE E ORE):\n${chatHistory}\n\nMichele ti ha inviato una nota vocale. Ascolta e rispondi rimanendo perfettamente coerente con tutta la conversazione recente e passata, con tono sobrio e senza tabelle o asterischi.` },
         { inlineData: { mimeType: mime, data: base64Audio } }
       ];
 
@@ -587,10 +593,10 @@ LE TUE SPECIALIZZAZIONI ED EXPERTISE (DA APPLICARE QUANDO PERTINENTE):
       const base64Data = btoa(binary);
 
       const mem = await getSupabaseMemory();
-      const chatHistory = await getRecentChatHistory(chatId, 6);
+      const chatHistory = await getRecentChatHistory(chatId, 30, 60);
       const todayMacros = await getTodayMacroSummary();
 
-      const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA RECENTE CHAT:\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA DA MICHELE. Didascalia: "${caption}".
+      const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA COMPLETA DEGLI ULTIMI 30 GIORNI (CON DATE E ORE):\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA DA MICHELE. Didascalia: "${caption}".
 
 COMPITO:
 1. SE LA FOTO È UN PIATTO O CIBO:
@@ -844,7 +850,7 @@ Compito:
       const mem = await getSupabaseMemory();
       const bia = await getSupabaseBia();
       const intervals = await getIntervalsRecent();
-      const chatHistory = await getRecentChatHistory(chatId, 8);
+      const chatHistory = await getRecentChatHistory(chatId, 30, 60);
       const todayMacros = await getTodayMacroSummary();
       const strengthHistory = await getRecentStrengthWorkouts();
 
@@ -855,7 +861,7 @@ ${intervals}
 ${todayMacros}
 ${strengthHistory}
 
-CRONOLOGIA RECENTE DELLA CHAT (COSA VI SIETE DETTI FINORA):
+CRONOLOGIA COMPLETA DEGLI ULTIMI 30 GIORNI (CON DATE E ORE ESATTE DEI MESSAGGI):
 ${chatHistory}
 
 ULTIMO MESSAGGIO DI MICHELE A CUI DEVI RISPONDERE:
