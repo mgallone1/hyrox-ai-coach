@@ -579,6 +579,82 @@ Genera il Morning Briefing del risveglio per Michele:
   }
 }
 
+async function checkAndSendProactiveNudge(chatId: number) {
+  try {
+    const now = new Date();
+    // Orario italiano (UTC + 1)
+    const itHours = (now.getUTCHours() + 1) % 24;
+    const itMins = now.getUTCMinutes();
+    const today = now.toISOString().split("T")[0];
+
+    // Definiamo i 4 slot intelligenti durante la giornata lavorativa e pre/post allenamento
+    let currentSlot = "";
+    let slotTheme = "";
+
+    if (itHours === 10 && itMins >= 15 && itMins <= 55) {
+      currentSlot = "mid_morning_posture";
+      slotTheme = "Pausa attiva lavoro al PC a metà mattina: de-compressione lombare seduta, mobilità dell'anca/psoas per chi lavora al computer, focus idratazione cellulare (raggiungere 1.5L), focus visivo/posturale.";
+    } else if (itHours === 14 && itMins >= 15 && itMins <= 55) {
+      currentSlot = "early_afternoon_focus";
+      slotTheme = "Gestione post-prandiale e prevenzione sonnolenza post-pranzo al PC: respirazione diaframmatica per il sistema nervoso, postura cervicale/spalle alla scrivania, idratazione pre-allenamento.";
+    } else if (itHours === 16 && itMins >= 30 && itMins <= 59) {
+      currentSlot = "pre_workout_fuel";
+      slotTheme = "Finestra pre-workout verso le 18:00: attivazione mentale, ultimo spuntino glucidico leggero per riempire il glicogeno senza appesantire la digestione, stop all'acqua abbondante per non avere la vescica piena al WOD, priming delle caviglie e del core prima di staccare dal lavoro.";
+    } else if (itHours === 21 && itMins >= 0 && itMins <= 55) {
+      currentSlot = "evening_recovery";
+      slotTheme = "Recupero serale profondo e scarico della colonna a letto/tappetino: posizione 90° psoas-relax per L5-S1, disattivazione della luce blu dagli schermi del PC/telefono, abbassamento della temperatura corporea per favorire il sonno profondo e l'HRV.";
+    }
+
+    if (!currentSlot) return;
+
+    // Controlliamo se per questo specifico slot e data abbiamo già inviato il consiglio
+    const checkRes = await fetch(`${SUPABASE_URL}/rest/v1/proactive_nudges?nudge_date=eq.${today}&slot_name=eq.${currentSlot}&select=id`, {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    });
+
+    if (checkRes.ok) {
+      const data = await checkRes.json();
+      if (data && data.length > 0) return; // Già inviato per oggi
+    }
+
+    const nudgePrompt = `Sei il Coach personale e consulente di salute integrata di Michele Gallone (34 anni, 189 cm, 99 kg, programmatore/lavora al PC tutto il giorno sedentario, si allena alle 18:00, operato L5-S1 e menisco sx).
+MOMENTO DELLA GIORNATA: ${slotTheme}
+
+COMPITO:
+Invia a Michele un consiglio proattivo di altissimo valore, concreto, creativo ma sempre posato, sobrio e professionale (niente fuffa o motivazione da social, zero frasi banali come 'ricordati di bere').
+Dagli un'azione da fare in 60-120 secondi:
+- Può riguardare la postura alla sedia, il respiro per abbassare il cortisolo, una tecnica di de-compressione da fare vicino alla scrivania, l'ottimizzazione del carburante o la preparazione al sonno.
+- Tono: calmo, intelligente, da vero specialista d'élite che si prende cura della persona a 360 gradi.
+- Lunghezza: 4-6 righe incisive. Zero asterischi (* o **), zero tabelle.`;
+
+    const nudgeText = await callGemini("Sei il Coach personale di Michele Gallone.", [{ text: nudgePrompt }]);
+
+    await sendTelegram(chatId, nudgeText);
+
+    // Registriamo l'avvenuto invio su Supabase
+    await fetch(`${SUPABASE_URL}/rest/v1/proactive_nudges`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        nudge_date: today,
+        slot_name: currentSlot,
+        content: nudgeText
+      })
+    });
+
+    await recordChatMessage(chatId, "assistant", `[Consiglio Proattivo - ${currentSlot}]: ${nudgeText}`);
+  } catch (e) {
+    console.error("Proactive nudge error", e);
+  }
+}
+
 serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("OK", { status: 200 });
@@ -586,6 +662,16 @@ serve(async (req) => {
 
   try {
     const update = await req.json();
+
+    // Trigger autonomo programmato da cron di Supabase (ogni 15 minuti)
+    if (update && update.source === "cron_check") {
+      const defaultChatId = 424093845; // Chat ID di Michele
+      await checkAndSendMorningBriefing(defaultChatId);
+      await checkAndSendWorkoutSummary(defaultChatId);
+      await checkAndSendProactiveNudge(defaultChatId);
+      return new Response("CRON_OK", { status: 200 });
+    }
+
     const msg = update.message;
     if (!msg) {
       return new Response("OK", { status: 200 });
@@ -598,6 +684,9 @@ serve(async (req) => {
 
     // Check automatico post-workout: rileva nuovi allenamenti e li unisce in un unico debriefing
     await checkAndSendWorkoutSummary(chatId);
+
+    // Check automatico consigli proattivi giornalieri
+    await checkAndSendProactiveNudge(chatId);
 
     const lastTime = await getLastMessageTime(chatId);
     let shouldGreet = true;
