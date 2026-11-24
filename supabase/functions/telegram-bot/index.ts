@@ -304,11 +304,14 @@ async function getIntervalsRecent(): Promise<string> {
         const last = wList[wList.length - 1];
         const sleepHours = Math.floor((last.sleepSecs || 0) / 3600);
         const sleepMins = Math.floor(((last.sleepSecs || 0) % 3600) / 60);
-        wellnessText = `Dati fisiologici e sonno (Giorno ${last.id}): Sonno ${sleepHours}h ${sleepMins}m (punteggio ${Math.round(last.sleepScore || 0)}), FC a riposo ${last.restingHR || 'N/D'} bpm, CTL ${Math.round(last.ctl || 0)}, ATL ${Math.round(last.atl || 0)}`;
+        const ctl = Math.round(last.ctl || 0);
+        const atl = Math.round(last.atl || 0);
+        const tsb = ctl - atl;
+        wellnessText = `Fisiologia e Sonno (${last.id}): Sonno ${sleepHours}h ${sleepMins}m, FC riposo ${last.restingHR || 'N/D'} bpm | Fitness (CTL) ${ctl}, Fatica (ATL) ${atl}, Freschezza (TSB) ${tsb > 0 ? '+' : ''}${tsb}`;
       }
     }
 
-    // 2. Allenamenti sincronizzati da Intervals.icu (ultimi 7 giorni)
+    // 2. Allenamenti sincronizzati da Intervals.icu con Telemetria Dettagliata
     let workoutText = "";
     const actRes = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/activities?oldest=${past}&newest=${today}`, {
       headers: { Authorization: authHeader, "User-Agent": "HyroxCoachBot/1.0" }
@@ -316,29 +319,81 @@ async function getIntervalsRecent(): Promise<string> {
     if (actRes.ok) {
       const actList = await actRes.json();
       if (actList && actList.length > 0) {
-        // Ordiniamo dal piu recente al piu vecchio
+        // Ordiniamo dal più recente al più vecchio
         const sortedActs = actList.slice().sort((a: any, b: any) => 
           new Date(b.start_date_local || b.start_date).getTime() - new Date(a.start_date_local || a.start_date).getTime()
         );
         const actLines: string[] = [];
-        for (const act of sortedActs.slice(0, 6)) {
+        for (const act of sortedActs.slice(0, 5)) {
           const dateStr = (act.start_date_local || act.start_date || "").replace('T', ' ').substring(0, 16);
-          const distKm = act.distance ? (act.distance / 1000).toFixed(2) + " km" : "";
           const movingMins = Math.floor((act.moving_time || 0) / 60);
           const movingSecs = (act.moving_time || 0) % 60;
-          let paceStr = "";
-          if (act.distance && act.moving_time) {
-            const paceSecKm = act.moving_time / (act.distance / 1000);
-            const pMin = Math.floor(paceSecKm / 60);
-            const pSec = Math.floor(paceSecKm % 60);
-            paceStr = `, Passo ${pMin}:${pSec < 10 ? '0' : ''}${pSec} min/km`;
+          
+          // Distanza e Passo
+          let distPace = "";
+          if (act.distance) {
+            const km = (act.distance / 1000).toFixed(2);
+            let paceStr = "";
+            if (act.moving_time) {
+              const paceSecKm = act.moving_time / (act.distance / 1000);
+              const pMin = Math.floor(paceSecKm / 60);
+              const pSec = Math.floor(paceSecKm % 60);
+              paceStr = ` @ ${pMin}:${pSec < 10 ? '0' : ''}${pSec}/km`;
+            }
+            distPace = `, ${km} km${paceStr}`;
           }
-          const hrStr = act.average_heartrate ? `, FC media ${act.average_heartrate} bpm (max ${act.max_heartrate || 'N/D'})` : "";
-          const calStr = act.calories ? `, Calorie ${act.calories} kcal` : "";
-          const loadStr = act.icu_training_load ? `, Training Load ${Math.round(act.icu_training_load)}` : "";
-          actLines.push(`- [${dateStr}] ${act.name || act.type}: ${distKm}${paceStr} (${movingMins}m ${movingSecs}s)${hrStr}${calStr}${loadStr}`);
+
+          // Cadenza (gestione cadenza per gamba o totale spm)
+          let cadenceStr = "";
+          if (act.average_cadence) {
+            let spm = Math.round(act.average_cadence);
+            if (spm < 110) spm = spm * 2; // se Intervals riporta un solo piede, raddoppia a totale SPM
+            cadenceStr = `, Cadenza ${spm} spm`;
+          }
+
+          // Cardio e Zone FC (Z1: Z2: Z3: Z4: Z5 in minuti)
+          let hrStr = "";
+          if (act.average_heartrate) {
+            hrStr = `, FC media ${act.average_heartrate} bpm (max ${act.max_heartrate || 'N/D'})`;
+          }
+
+          let zoneStr = "";
+          if (act.icu_hr_zone_times && Array.isArray(act.icu_hr_zone_times)) {
+            const zMins = act.icu_hr_zone_times.map((sec: number) => Math.round(sec / 60));
+            // zMins: [Z1, Z2, Z3, Z4, Z5, ...]
+            const activeZones = [];
+            if (zMins[0]) activeZones.push(`Z1:${zMins[0]}m`);
+            if (zMins[1]) activeZones.push(`Z2:${zMins[1]}m`);
+            if (zMins[2]) activeZones.push(`Z3:${zMins[2]}m`);
+            if (zMins[3]) activeZones.push(`Z4:${zMins[3]}m`);
+            if (zMins[4]) activeZones.push(`Z5:${zMins[4]}m`);
+            if (activeZones.length > 0) {
+              zoneStr = ` [Zone: ${activeZones.join(' ')}]`;
+            }
+          }
+
+          // Dislivello
+          let elevStr = "";
+          if (act.total_elevation_gain && act.total_elevation_gain > 5) {
+            elevStr = `, D+ ${Math.round(act.total_elevation_gain)}m`;
+          }
+
+          // Carico & Intensità
+          const load = act.icu_training_load ? `Load ${Math.round(act.icu_training_load)}` : "";
+          const intensity = act.icu_intensity ? `Intensità ${Math.round(act.icu_intensity)}%` : "";
+          const cal = act.calories ? `${act.calories} kcal` : "";
+          const metaList = [load, intensity, cal].filter(Boolean).join(', ');
+          const metaStr = metaList ? ` (${metaList})` : "";
+
+          // Frazioni / Laps (se presenti)
+          let lapsStr = "";
+          if (act.interval_summary && Array.isArray(act.interval_summary) && act.interval_summary.length > 0) {
+            lapsStr = `\n  Frazioni: ${act.interval_summary.slice(0, 4).join(', ')}`;
+          }
+
+          actLines.push(`- [${dateStr}] ${act.name || act.type}: ${movingMins}m ${movingSecs}s${distPace}${cadenceStr}${hrStr}${zoneStr}${elevStr}${metaStr}${lapsStr}`);
         }
-        workoutText = `Allenamenti sincronizzati recenti (da Intervals.icu):\n${actLines.join("\n")}`;
+        workoutText = `SESSIONI SINCRONIZZATE RECENTI (Telemetria avanzata Intervals.icu):\n${actLines.join("\n")}`;
       } else {
         workoutText = "Nessun allenamento sincronizzato negli ultimi 7 giorni.";
       }
@@ -1083,7 +1138,11 @@ ISTRUZIONI PER LA RISPOSTA:
    - Conferma i carichi e dai un commento tecnico rapido sul sovraccarico progressivo.
    - Includi in fondo al testo un tag JSON nascosto nel formato: <!--STRENGTH:[{"exercise":"Panca Piana","sets":4,"reps":8,"weight":80},{"exercise":"Rematore","sets":4,"reps":10,"weight":70}]--> così che il sistema registri i dati in automatico nel diario di forza.
 4. Se Michele usa il comando /forza o chiede della seduta di volume/ipertrofia, consulta i carichi registrati nello storico sopra per suggerirgli la progressione di peso e le accortezze di setup articolare.
-5. Se Michele chiede dei suoi allenamenti, di ieri, della corsa o del recupero:
+5. INTERPRETAZIONE CLINICA E TECNICA DELLA TELEMETRIA (Massima accuratezza):
+   - Cadenza: valuta la cadenza (SPM). Il target ideale per Michele (99 kg, discectomia L5-S1) è 175-180 spm per ridurre la forza d'impatto al suolo. Sotto i 165 spm segnala l'overstriding.
+   - Zone Cardio (Z1-Z5): se visibili le zone, commenta la distribuzione (es. tempo in Z2 base aerobica vs Z4/Z5 soglia anaerobica per Hyrox).
+   - Rapporto CTL/ATL/TSB: se TSB è positivo (es. +2/+5) Michele è fresco; se è negativo (< -10) accumula fatica.
+   - Carico di lavoro (Training Load): confronta l'impegno rispetto al volume settimanale.
    - Consulta attentamente la lista degli allenamenti sincronizzati sopra (inclusi data, tipo, durata, battiti e calorie).
    - Se Michele chiede di ieri o dell'ultima sessione, cita espressamente la sessione registrata (es. HIIT, corsa, forza con orario, durata e FC) commentando l'impatto sul recupero e sulla preparazione Hyrox.
    - Non dire MAI che non ci sono allenamenti se sono elencati nella sezione telemetria sopra.
