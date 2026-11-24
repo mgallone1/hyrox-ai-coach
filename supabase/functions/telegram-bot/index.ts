@@ -307,7 +307,14 @@ async function getIntervalsRecent(): Promise<string> {
         const ctl = Math.round(last.ctl || 0);
         const atl = Math.round(last.atl || 0);
         const tsb = ctl - atl;
-        wellnessText = `Fisiologia e Sonno (${last.id}): Sonno ${sleepHours}h ${sleepMins}m, FC riposo ${last.restingHR || 'N/D'} bpm | Fitness (CTL) ${ctl}, Fatica (ATL) ${atl}, Freschezza (TSB) ${tsb > 0 ? '+' : ''}${tsb}`;
+        const acwr = ctl > 0 ? (last.atl / last.ctl).toFixed(2) : "1.00";
+        let acwrLabel = "Sweet Spot (ottimale)";
+        const acwrNum = parseFloat(acwr);
+        if (acwrNum < 0.8) acwrLabel = "Sotto-carico (fresco)";
+        else if (acwrNum > 1.5) acwrLabel = "Danger Zone (rischio sovrallenamento)";
+        else if (acwrNum > 1.3) acwrLabel = "Zona Attenzione (carico elevato)";
+
+        wellnessText = `Fisiologia e Sonno (${last.id}): Sonno ${sleepHours}h ${sleepMins}m, FC riposo ${last.restingHR || 'N/D'} bpm | Fitness (CTL) ${ctl}, Fatica (ATL) ${atl}, Freschezza (TSB) ${tsb > 0 ? '+' : ''}${tsb} | Indice ACWR: ${acwr} [${acwrLabel}]`;
       }
     }
 
@@ -864,21 +871,29 @@ LE TUE SPECIALIZZAZIONI ED EXPERTISE (DA APPLICARE QUANDO PERTINENTE):
 
       const promptText = `DATI ATLETA:\n${mem}\n\nCRONOLOGIA COMPLETA DEGLI ULTIMI 30 GIORNI (CON DATE E ORE):\n${chatHistory}\n\n${todayMacros}\n\nFOTO INVIATA DA MICHELE. Didascalia: "${caption}".
 
-COMPITO:
-1. SE LA FOTO È UN PIATTO O CIBO:
-   - Stima chiara e diretta dei valori: Calorie, Carboidrati, Proteine, Grassi.
-   - Includi in fondo al messaggio un blocco JSON nascosto su una riga: <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}--> per salvarlo nel diario.
+COMPITO (Identifica subito la tipologia dell'immagine):
 
-2. SE LA FOTO È UNO SCREENSHOT DI FIT SQUARE / HYROX / CROSSFIT (WOD, circuito, lavagna o scheda di allenamento):
-   - Leggi e decodifica tutti gli esercizi del circuito (stazioni, carichi in kg, ripetizioni, tempi o round AMRAP/EMOM).
-   - Analizza la fattibilità per Michele tenendo conto della stazza (99 kg) e delle protezioni articolari (discectomia L5-S1 e ginocchio sx operato).
-   - Dai la strategia di pacing (come gestire il ritmo cardiaco, dove spingere e dove risparmiarsi) e le eventuali alternative sicure se c'è un esercizio rischioso.
-   - NUTRIZIONE & TIMING PRE-WORKOUT (FONDAMENTALE SE INVIATO AL MATTINO O PRIMA DI PRANZO):
-     - Dagli consigli precisi su cosa mangiare a pranzo e come spuntino pomeridiano per arrivare alla sessione serale (ore 18:00 / 18:30) con le riserve di glicogeno muscolare piene ma a stomaco leggero.
-     - Indicagli la quota di carboidrati complessi a pranzo (es. riso o quinoa), proteine magre, zero grassi pesanti che rallentano lo svuotamento gastrico e il timing di idratazione (bere almeno 2L entro le 16:30).
-   - Salva gli esercizi nel database di forza includendo in fondo: <!--STRENGTH:[{"exercise":"Nome Esercizio","sets":4,"reps":10,"weight":50}]--> se sono presenti carichi/serie.
+1. SE LA FOTO È UN PIATTO, CIBO O ETICHETTA NUTRIZIONALE:
+   - Identifica con precisione gli alimenti e fai una stima realistica delle grammature e dei macronutrienti: Calorie, Carboidrati, Proteine, Grassi.
+   - Commenta se il pasto è in linea con il target proteico giornaliero e gli obiettivi Hyrox.
+   - Includi tassativamente in fondo al messaggio il blocco JSON nascosto:
+     <!--MEAL:{"name":"Pranzo","calories":750,"carbs":80,"protein":45,"fat":25}-->
+     (Sostituisci il nome con Colazione, Pranzo, Cena o Spuntino e i valori numerici stimati).
 
-3. Stile: Diretto, sintetico, professionale, zero asterischi e zero tabelle.`;
+2. SE LA FOTO È UNO SCREENSHOT DI ALLENAMENTO, CARDIO O GRAFICO SMARTWATCH (Huawei Health, Strava, Garmin, Intervals):
+   - DECODIFICA DEI SEGMENTI E DEI GRAFICI CARDIO:
+     * Leggi i parziali/lap, i tempi di ogni frazione o stazione, e il grafico della frequenza cardiaca.
+     * Analizza la progressione cardiaca: identifica dove si è verificato il picco, dove il battito è salito troppo rapidamente (deriva cardiaca da fatica precoce) e la velocità di recupero tra un segmento e l'altro.
+     * Valuta come è andato Michele in ciascun segmento specifico (es. corsa iniziale, stazioni, tratti aerobici vs tratti anaerobici Z4/Z5).
+     * Dai un giudizio tecnico sintetico: gestione del ritmo (pacing negativo/costante vs partenza troppo aggressiva) e consigli per la prossima volta.
+
+3. SE LA FOTO È UNA SCHEDA, LAVAGNA O WOD FIT SQUARE / HYROX (Workout pianificato):
+   - Leggi e decodifica tutti gli esercizi del circuito (stazioni, carichi, ripetizioni, AMRAP/EMOM).
+   - Fornisci strategia di pacing e gestione della frequenza cardiaca stazione per stazione.
+   - Se ci sono serie e ripetizioni di forza, includi in fondo:
+     <!--STRENGTH:[{"exercise":"Esercizio","sets":4,"reps":10,"weight":50}]-->
+
+4. DIVIETO ASSOLUTO: Non nominare i 99 kg, la stazza o gli interventi passati. Analizza i numeri, i grafici e il cibo in modo diretto e pragmatico. Zero asterischi (* o **) e zero tabelle ASCII.`;
 
       const parts = [
         { text: promptText },
@@ -1140,7 +1155,12 @@ ISTRUZIONI PER LA RISPOSTA:
    - Conferma i carichi e dai un commento tecnico rapido sul sovraccarico progressivo.
    - Includi in fondo al testo un tag JSON nascosto nel formato: <!--STRENGTH:[{"exercise":"Panca Piana","sets":4,"reps":8,"weight":80},{"exercise":"Rematore","sets":4,"reps":10,"weight":70}]--> così che il sistema registri i dati in automatico nel diario di forza.
 4. Se Michele usa il comando /forza o chiede della seduta di volume/ipertrofia, consulta i carichi registrati nello storico sopra per suggerirgli la progressione di peso e le accortezze di setup articolare.
-5. INTERPRETAZIONE TECNICA ED ESSENZIALE DELLA TELEMETRIA:
+5. ANALISI DI ALLENAMENTI SCRITTI O SEGMENTI CARDIO:
+   - Se Michele ti descrive per testo una sessione o i suoi segmenti (es. "fatto 4x1000m a 4:55 con fc 160, poi sled push a 170 bpm, poi rower a 2:02"):
+     * Suddividi l'analisi segmento per segmento, valutando la tenuta cardiaca e la congruenza con i target Hyrox.
+     * Confronta la frequenza di ciascun esercizio con la sua soglia anaerobica (172 bpm): commenta dove ha lavorato in Z2/Z3 e dove è andato in accumulo di lattato in Z4/Z5.
+     * Valuta l'efficienza della transizione (tempo di recupero del battito tra una stazione e l'altra).
+   - Se disponibile, fai riferimento all'indice ACWR (carico acuto/cronico) per confermare se il volume settimanale è nello Sweet Spot (0.8 - 1.3) o a rischio sovraccarico.
    - Commenta i dati numerici reali (durata, passo, FC media/max, tempo nelle zone cardio Z1-Z5, Training Load).
    - Se Michele chiede di ieri o dell'ultima sessione, cita direttamente la sessione con orario, durata, battiti e intensità.
    - DIVIETO CATEGORICO: NON citare i 99 kg, la stazza muscolare, la schiena L5-S1 o il ginocchio sinistro. Rispondi solo all'oggetto della domanda, senza ricami sui suoi dati fisici.
