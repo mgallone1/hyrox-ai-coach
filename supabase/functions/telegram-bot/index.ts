@@ -41,7 +41,7 @@ async function sendTelegram(chatId: number, text: string) {
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
   await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
     body: JSON.stringify({ chat_id: chatId, text: text })
   });
 }
@@ -50,7 +50,7 @@ async function sendTelegramPhoto(chatId: number, photoUrl: string, caption: stri
   const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto`;
   await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
     body: JSON.stringify({ chat_id: chatId, photo: photoUrl, caption: caption })
   });
 }
@@ -445,10 +445,10 @@ async function getTodayMacroSummary(): Promise<string> {
 async function callGemini(systemPrompt: string, parts: any[]): Promise<string> {
   for (const m of GEMINI_MODELS) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${GEMINI_API_KEY}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`;
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: parts }],
