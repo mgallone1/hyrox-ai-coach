@@ -27,8 +27,9 @@ const ATHLETE_HEIGHT = Deno.env.get("ATHLETE_HEIGHT") || "180";
 const ATHLETE_TARGET = Deno.env.get("ATHLETE_TARGET") || "Hyrox Preparation";
 
 const GEMINI_MODELS = [
-  "gemini-3.5-flash",
-  "gemini-3.1-flash-lite"
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite",
+  "gemini-3.8-flash"
 ];
 
 function cleanFormatting(t: string): string {
@@ -295,7 +296,7 @@ async function getIntervalsRecent(): Promise<string> {
     // 1. Wellness (Sonno, FC riposo, fitness/fatica)
     let wellnessText = "";
     const res = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/wellness?oldest=${past}&newest=${today}`, {
-      headers: { Authorization: authHeader }
+      headers: { Authorization: authHeader, "User-Agent": "HyroxCoachBot/1.0" }
     });
     if (res.ok) {
       const wList = await res.json();
@@ -303,30 +304,43 @@ async function getIntervalsRecent(): Promise<string> {
         const last = wList[wList.length - 1];
         const sleepHours = Math.floor((last.sleepSecs || 0) / 3600);
         const sleepMins = Math.floor(((last.sleepSecs || 0) % 3600) / 60);
-        wellnessText = `Orologio GT 6 oggi: Sonno ${sleepHours} ore e ${sleepMins} minuti (punteggio ${Math.round(last.sleepScore || 0)}), FC a riposo ${last.restingHR} bpm, CTL ${Math.round(last.ctl || 0)}, ATL ${Math.round(last.atl || 0)}`;
+        wellnessText = `Dati fisiologici e sonno (Giorno ${last.id}): Sonno ${sleepHours}h ${sleepMins}m (punteggio ${Math.round(last.sleepScore || 0)}), FC a riposo ${last.restingHR || 'N/D'} bpm, CTL ${Math.round(last.ctl || 0)}, ATL ${Math.round(last.atl || 0)}`;
       }
     }
 
-    // 2. Ultimo Allenamento sincronizzato da Huawei Watch GT 6
+    // 2. Allenamenti sincronizzati da Intervals.icu (ultimi 7 giorni)
     let workoutText = "";
     const actRes = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/activities?oldest=${past}&newest=${today}`, {
-      headers: { Authorization: authHeader }
+      headers: { Authorization: authHeader, "User-Agent": "HyroxCoachBot/1.0" }
     });
     if (actRes.ok) {
       const actList = await actRes.json();
       if (actList && actList.length > 0) {
-        const lastAct = actList[actList.length - 1];
-        const distKm = lastAct.distance ? (lastAct.distance / 1000).toFixed(2) + " km" : "N/D";
-        const movingMins = Math.floor((lastAct.moving_time || 0) / 60);
-        const movingSecs = (lastAct.moving_time || 0) % 60;
-        let paceStr = "";
-        if (lastAct.distance && lastAct.moving_time) {
-          const paceSecKm = lastAct.moving_time / (lastAct.distance / 1000);
-          const pMin = Math.floor(paceSecKm / 60);
-          const pSec = Math.floor(paceSecKm % 60);
-          paceStr = `, Passo ${pMin}:${pSec < 10 ? '0' : ''}${pSec} min/km`;
+        // Ordiniamo dal piu recente al piu vecchio
+        const sortedActs = actList.slice().sort((a: any, b: any) => 
+          new Date(b.start_date_local || b.start_date).getTime() - new Date(a.start_date_local || a.start_date).getTime()
+        );
+        const actLines: string[] = [];
+        for (const act of sortedActs.slice(0, 6)) {
+          const dateStr = (act.start_date_local || act.start_date || "").replace('T', ' ').substring(0, 16);
+          const distKm = act.distance ? (act.distance / 1000).toFixed(2) + " km" : "";
+          const movingMins = Math.floor((act.moving_time || 0) / 60);
+          const movingSecs = (act.moving_time || 0) % 60;
+          let paceStr = "";
+          if (act.distance && act.moving_time) {
+            const paceSecKm = act.moving_time / (act.distance / 1000);
+            const pMin = Math.floor(paceSecKm / 60);
+            const pSec = Math.floor(paceSecKm % 60);
+            paceStr = `, Passo ${pMin}:${pSec < 10 ? '0' : ''}${pSec} min/km`;
+          }
+          const hrStr = act.average_heartrate ? `, FC media ${act.average_heartrate} bpm (max ${act.max_heartrate || 'N/D'})` : "";
+          const calStr = act.calories ? `, Calorie ${act.calories} kcal` : "";
+          const loadStr = act.icu_training_load ? `, Training Load ${Math.round(act.icu_training_load)}` : "";
+          actLines.push(`- [${dateStr}] ${act.name || act.type}: ${distKm}${paceStr} (${movingMins}m ${movingSecs}s)${hrStr}${calStr}${loadStr}`);
         }
-        workoutText = `Ultimo allenamento (${lastAct.start_date_local?.replace('T', ' ')}): ${lastAct.name || lastAct.type}, Durata ${movingMins}m ${movingSecs}s, Distanza ${distKm}${paceStr}, FC media ${lastAct.average_heartrate || 'N/D'} bpm (max ${lastAct.max_heartrate || 'N/D'} bpm), Calorie ${lastAct.calories || 'N/D'} kcal.`;
+        workoutText = `Allenamenti sincronizzati recenti (da Intervals.icu):\n${actLines.join("\n")}`;
+      } else {
+        workoutText = "Nessun allenamento sincronizzato negli ultimi 7 giorni.";
       }
     }
 
@@ -406,7 +420,7 @@ async function checkAndSendWorkoutSummary(chatId: number) {
     const past = new Date(Date.now() - 2 * 86400000).toISOString().split("T")[0];
 
     const actRes = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/activities?oldest=${past}&newest=${today}`, {
-      headers: { Authorization: authHeader }
+      headers: { Authorization: authHeader, "User-Agent": "HyroxCoachBot/1.0" }
     });
     if (!actRes.ok) return;
 
@@ -517,7 +531,7 @@ async function checkAndSendMorningBriefing(chatId: number) {
     const authHeader = "Basic " + btoa("API_KEY:" + INTERVALS_KEY);
     const past = new Date(Date.now() - 3 * 86400000).toISOString().split("T")[0];
     const res = await fetch(`https://intervals.icu/api/v1/athlete/${ATHLETE_ID}/wellness?oldest=${past}&newest=${today}`, {
-      headers: { Authorization: authHeader }
+      headers: { Authorization: authHeader, "User-Agent": "HyroxCoachBot/1.0" }
     });
 
     if (res.ok) {
@@ -1069,7 +1083,10 @@ ISTRUZIONI PER LA RISPOSTA:
    - Conferma i carichi e dai un commento tecnico rapido sul sovraccarico progressivo.
    - Includi in fondo al testo un tag JSON nascosto nel formato: <!--STRENGTH:[{"exercise":"Panca Piana","sets":4,"reps":8,"weight":80},{"exercise":"Rematore","sets":4,"reps":10,"weight":70}]--> così che il sistema registri i dati in automatico nel diario di forza.
 4. Se Michele usa il comando /forza o chiede della seduta di volume/ipertrofia, consulta i carichi registrati nello storico sopra per suggerirgli la progressione di peso e le accortezze di setup articolare.
-5. Se Michele chiede del suo ultimo allenamento, della corsa o del recupero, consulta i dati della telemetria sopra.
+5. Se Michele chiede dei suoi allenamenti, di ieri, della corsa o del recupero:
+   - Consulta attentamente la lista degli allenamenti sincronizzati sopra (inclusi data, tipo, durata, battiti e calorie).
+   - Se Michele chiede di ieri o dell'ultima sessione, cita espressamente la sessione registrata (es. HIIT, corsa, forza con orario, durata e FC) commentando l'impatto sul recupero e sulla preparazione Hyrox.
+   - Non dire MAI che non ci sono allenamenti se sono elencati nella sezione telemetria sopra.
 6. Se Michele chiede cosa mangiare o dei macro, consulta il riepilogo pasti registrati oggi sopra.
 7. Zero asterischi e zero tabelle.`;
 
