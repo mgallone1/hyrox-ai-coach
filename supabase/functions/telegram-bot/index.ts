@@ -11,10 +11,18 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // ==============================================================================
 // CONFIGURAZIONE VARIABILI D'AMBIENTE (SICUREZZA: ZERO CREDENZIALI HARDCODATE)
 // ==============================================================================
-const TELEGRAM_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN") || "";
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
+function requireEnv(name: string): string {
+  const val = Deno.env.get(name);
+  if (!val || !val.trim()) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return val.trim();
+}
+
+const TELEGRAM_TOKEN = requireEnv("TELEGRAM_BOT_TOKEN");
+const SUPABASE_URL = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+const GEMINI_API_KEY = requireEnv("GEMINI_API_KEY");
 
 // Credenziali opzionali telemetria smartwatch
 const INTERVALS_KEY = Deno.env.get("INTERVALS_API_KEY") || "";
@@ -1094,12 +1102,53 @@ Compito:
           await sendTelegram(chatId, "Risposte vocali ATTIVATE! Da adesso riceverai anche un messaggio audio del coach insieme al testo.");
         }
         return new Response("OK", { status: 200 });
+      } else if (userText === "/simulazione") {
+        const intervals = await getIntervalsRecent();
+        const mem = await getSupabaseMemory();
+        const simPrompt = `DATI ATLETA:
+${mem}
+
+TELEMETRIA RECENTE:
+${intervals}
+
+COMPITO:
+Esegui una simulazione cronometrica realistica per la gara Hyrox Open Men di Milano (target SUB 1h 20m = 79:59):
+1. Stima gli 8x1000m di corsa basandoti sul passo reale recente (o 5:00/km target).
+2. Stima le 8 stazioni funzionali (SkiErg, Sled Push, Sled Pull, Burpee Broad Jumps, Row, Farmers Carry, Sandbag Lunges, Wall Balls) e la Roxzone (transizioni ~60s ciascuna).
+3. Somma il tempo totale stimato e indica chiaramente dove si guadagnano o perdono secondi rispetto a 1h 20m.
+Stile diretto, pragmatico, zero asterischi (* o **) e zero tabelle ASCII.`;
+        const simReply = await callGemini("Sei il Coach Hyrox personale di Michele Gallone.", [{ text: simPrompt }]);
+        await sendTelegram(chatId, simReply);
+        await recordChatMessage(chatId, "user", "/simulazione");
+        await recordChatMessage(chatId, "assistant", simReply);
+        return new Response("OK", { status: 200 });
+      } else if (userText === "/workout") {
+        const intervals = await getIntervalsRecent();
+        const strengthHistory = await getRecentStrengthWorkouts();
+        const woPrompt = `TELEMETRIA & RECUPERO OGGI:
+${intervals}
+
+STORICO FORZA RECENTE:
+${strengthHistory}
+
+COMPITO:
+Genera la seduta ottimale per oggi alle 18:00 (FitSquare Buccinasco o corsa):
+1. Adatta intensità e volume in base a sonno, FC a riposo, TSB e indice ACWR attuali (se TSB < 0 o ACWR > 1.3 privilegia Z2/tecnica; se TSB >= 0 spingi su ritmo gara o sovraccarico progressivo).
+2. Specifica blocchi, durata/ripetizioni e zone cardio target.
+3. Non citare peso, stazza o infortuni passati. Zero asterischi (* o **) e zero tabelle ASCII.`;
+        const woReply = await callGemini("Sei il Coach Hyrox personale di Michele Gallone.", [{ text: woPrompt }]);
+        await sendTelegram(chatId, woReply);
+        await recordChatMessage(chatId, "user", "/workout");
+        await recordChatMessage(chatId, "assistant", woReply);
+        return new Response("OK", { status: 200 });
       } else if (userText === "/aiuto" || userText === "/help") {
         const helpMsg = "Ecco i comandi rapidi disponibili nel menu:\n\n" +
           "/gara - Proiezione Pacing Hyrox SUB-1h 20m\n" +
           "/recupero - Analisi sonno, FC a riposo e carico da Huawei GT 6\n" +
           "/macro - Riepilogo pasti registrati oggi e target proteico\n" +
           "/allenamento - Consigli su sessione odierna FitSquare o corsa\n" +
+          "/workout - Genera la seduta ottimale di oggi su sonno, TSB e ACWR\n" +
+          "/simulazione - Proiezione cronometrica Hyrox Milano vs Sub 1h20m\n" +
           "/mobilita - Routine di mobilità e prevenzione articolare\n" +
           "/aiuto - Questo messaggio informativo.\n\n" +
           "Puoi anche inviarmi normalmente messaggi di testo, note vocali, foto di piatti o PDF di referti BIA.";
